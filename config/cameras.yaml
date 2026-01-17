@@ -1,0 +1,52 @@
+# Cameras configuration
+# Each camera has an ID, RTSP URL, and zones for intrusion/safety detection
+
+cameras:
+  - id: "camera_1"
+    name: "Main Entrance"
+    rtsp_url: "rtsp://username:password@192.168.1.100:554/stream1"
+    enabled: true
+    analytics:
+      people_counting: true
+      intrusion_detection: true
+      safety_detection: false
+    zones:
+      - name: "Restricted Area"
+        type: "intrusion"
+        polygon: [[100, 100], [500, 100], [500, 400], [100, 400]]
+        alert_on_entry: true
+        
+  - id: "camera_2"
+    name: "Warehouse Floor"
+    rtsp_url: "rtsp://username:password@192.168.1.101:554/stream1"
+    enabled: true
+    analytics:
+      people_counting: true
+      intrusion_detection: false
+      safety_detection: true
+    zones:
+      - name: "Forklift Zone"
+        type: "safety"
+        polygon: [[50, 50], [600, 50], [600, 450], [50, 450]]
+        required_ppe: ["helmet", "vest"]
+        
+  - id: "camera_3"
+    name: "Exit Door"
+    rtsp_url: "rtsp://username:password@192.168.1.102:554/stream1"
+    enabled: true
+    analytics:
+      people_counting: true
+      intrusion_detection: false
+      safety_detection: false
+
+# Detection classes configuration
+detection_classes:
+  person: 0
+  helmet: 1
+  vest: 2
+  
+# Alert rules
+alert_rules:
+  max_people_count: 50  # Alert if people count exceeds this
+  intrusion_immediate: true  # Send alert immediately on intrusion
+  safety_violation_threshold: 3  # Number of consecutive frames before alerting
