@@ -41,6 +41,8 @@ class Settings(BaseSettings):
     email_smtp_port: int = Field(default=587)
     email_from: Optional[str] = Field(default=None)
     email_to: Optional[str] = Field(default=None)
+    email_username: Optional[str] = Field(default=None)
+    email_password: Optional[str] = Field(default=None)
     
     # Database
     db_type: str = Field(default="sqlite")

@@ -91,6 +91,26 @@ class DetectionEngine:
         self.iou_threshold = settings.iou_threshold
         
         logger.info("Detection engine initialized")
+    
+    def _get_class_name(self, class_id: int) -> str:
+        """
+        Get class name for a given class ID.
+        
+        Args:
+            class_id: Class ID from model
+            
+        Returns:
+            Class name string
+        """
+        try:
+            if class_id < len(self.model.names):
+                return self.model.names[class_id]
+            else:
+                logger.warning(f"Unknown class ID: {class_id}")
+                return f"class_{class_id}"
+        except Exception as e:
+            logger.error(f"Error getting class name for ID {class_id}: {e}")
+            return f"class_{class_id}"
         
     def detect(self, frame: np.ndarray) -> List[DetectionResult]:
         """
@@ -128,7 +148,7 @@ class DetectionEngine:
                     bbox = box.xyxy[0].cpu().numpy().astype(int).tolist()
                     
                     # Get class name
-                    class_name = self.model.names[class_id] if class_id < len(self.model.names) else f"class_{class_id}"
+                    class_name = self._get_class_name(class_id)
                     
                     result = DetectionResult(class_id, class_name, confidence, bbox)
                     results.append(result)

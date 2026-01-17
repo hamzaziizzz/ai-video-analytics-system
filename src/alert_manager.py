@@ -192,7 +192,9 @@ Metadata: {json.dumps(alert.metadata, indent=2)}
             
             with smtplib.SMTP(settings.email_smtp_host, settings.email_smtp_port) as server:
                 server.starttls()
-                # Note: In production, use proper credentials
+                # Authenticate if credentials are provided
+                if settings.email_username and settings.email_password:
+                    server.login(settings.email_username, settings.email_password)
                 server.send_message(msg)
                 
             logger.info(f"Email sent for {alert.get_key()}")

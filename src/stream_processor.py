@@ -5,6 +5,7 @@ Handles multi-stream ingestion with threading support.
 import cv2
 import time
 import threading
+import queue
 from queue import Queue, Empty
 from typing import Optional, Callable
 from loguru import logger
@@ -92,12 +93,12 @@ class RTSPStream:
                     # Add frame to queue (non-blocking)
                     try:
                         self.frame_queue.put_nowait(frame)
-                    except:
+                    except queue.Full:
                         # Queue is full, remove oldest frame and add new one
                         try:
                             self.frame_queue.get_nowait()
                             self.frame_queue.put_nowait(frame)
-                        except:
+                        except (queue.Empty, queue.Full):
                             pass
                     
                     # Call callback if provided
