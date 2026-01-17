@@ -73,8 +73,11 @@ class VideoAnalyticsSystem:
                 config = yaml.safe_load(f)
             logger.info(f"Loaded configuration from {config_path}")
             return config
-        except Exception as e:
-            logger.error(f"Failed to load config: {e}")
+        except (FileNotFoundError, PermissionError) as e:
+            logger.error(f"Failed to load config file: {e}")
+            raise
+        except yaml.YAMLError as e:
+            logger.error(f"Failed to parse config YAML: {e}")
             raise
     
     def _frame_callback(self, camera_id: str, frame):
@@ -104,7 +107,7 @@ class VideoAnalyticsSystem:
                         f"{len(results.get('intrusions', []))} intrusions, "
                         f"{len(results.get('safety_violations', []))} safety violations")
                         
-        except Exception as e:
+        except (cv2.error, ValueError, RuntimeError, KeyError) as e:
             logger.error(f"Error processing frame from {camera_id}: {e}")
     
     def start(self):
@@ -124,7 +127,10 @@ class VideoAnalyticsSystem:
             # Wait indefinitely
             signal.pause()
             
-        except Exception as e:
+        except (KeyboardInterrupt, SystemExit):
+            logger.info("Shutdown signal received")
+            self.stop()
+        except (RuntimeError, OSError) as e:
             logger.error(f"System error: {e}")
             self.stop()
     

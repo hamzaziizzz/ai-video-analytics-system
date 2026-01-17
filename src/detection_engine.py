@@ -80,10 +80,10 @@ class DetectionEngine:
                 try:
                     self.model.export(format='engine', device=0, half=(settings.tensorrt_precision == 'fp16'))
                     logger.info("TensorRT export successful")
-                except Exception as e:
+                except (RuntimeError, ValueError, ImportError) as e:
                     logger.warning(f"TensorRT export failed: {e}, using PyTorch model")
                     
-        except Exception as e:
+        except (FileNotFoundError, ImportError) as e:
             logger.error(f"Failed to load model: {e}")
             raise
             
@@ -153,7 +153,7 @@ class DetectionEngine:
                     result = DetectionResult(class_id, class_name, confidence, bbox)
                     results.append(result)
                     
-        except Exception as e:
+        except (RuntimeError, ValueError, AttributeError) as e:
             logger.error(f"Detection error: {e}")
             
         return results

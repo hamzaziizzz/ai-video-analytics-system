@@ -157,7 +157,7 @@ class AlertManager:
             else:
                 logger.warning(f"Webhook failed with status {response.status_code}")
                 
-        except Exception as e:
+        except (requests.RequestException, requests.Timeout, requests.ConnectionError) as e:
             logger.error(f"Webhook error: {e}")
     
     def _send_email(self, alert: Alert):
@@ -199,7 +199,8 @@ Metadata: {json.dumps(alert.metadata, indent=2)}
                 
             logger.info(f"Email sent for {alert.get_key()}")
             
-        except Exception as e:
+        except (smtplib.SMTPException, smtplib.SMTPAuthenticationError, 
+                smtplib.SMTPConnectError, OSError) as e:
             logger.error(f"Email error: {e}")
     
     def _log_alert(self, alert: Alert):
@@ -212,7 +213,7 @@ Metadata: {json.dumps(alert.metadata, indent=2)}
         try:
             with open('alerts/alert_log.json', 'a') as f:
                 f.write(json.dumps(alert.to_dict()) + '\n')
-        except Exception as e:
+        except (IOError, OSError, PermissionError) as e:
             logger.error(f"Failed to log alert: {e}")
     
     def get_stats(self) -> Dict:
