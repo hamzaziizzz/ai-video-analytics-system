@@ -1,0 +1,61 @@
+{
+  "app": {
+    "host": "0.0.0.0",
+    "port": 8000,
+    "log_level": "INFO",
+    "suppress_cv_warnings": true
+  },
+  "cameras": [
+    {
+      "camera_id": "cam_entrance",
+      "name": "Main Entrance",
+      "rtsp_url": 0,
+      "enabled": true,
+      "fps_limit": 30,
+      "queue_size": 30,
+      "reconnect_min_backoff": 1.0,
+      "reconnect_max_backoff": 30.0
+    }
+  ],
+  "inference": {
+    "engine": "tensorrt",
+    "model_path": "models/trt-engine/yolo26x.engine",
+    "labels": ["person"],
+    "input_size": [640, 640],
+    "confidence_threshold": 0.4,
+    "nms_iou_threshold": 0.5,
+    "device": "cuda:0",
+    "has_objectness": false,
+    "end_to_end": true,
+    "debug_log_detections": false,
+    "debug_log_interval_seconds": 2.0,
+    "debug_log_max_detections": 5,
+    "debug_log_raw_output": false,
+    "debug_log_raw_interval_seconds": 2.0,
+    "debug_log_raw_rows": 3,
+    "debug_log_raw_cols": 6
+  },
+  "people_count": {
+    "min_count": 1,
+    "stable_frames": 3,
+    "cooldown_seconds": 10.0,
+    "report_interval_seconds": 60.0,
+    "class_name": "person",
+    "class_id": 0,
+    "zones": {
+      "entrance_zone": [[0, 0], [640, 0], [640, 360], [0, 360]]
+    },
+    "zone_name": null
+  },
+  "streaming": {
+    "enabled": true,
+    "draw_boxes": true,
+    "draw_all_detections": false,
+    "jpeg_quality": 80,
+    "fps_limit": 30
+  },
+  "alerts": {
+    "webhooks": [],
+    "timeout_seconds": 5.0
+  }
+}

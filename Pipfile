@@ -9,8 +9,25 @@ url = "https://pypi.ngc.nvidia.com"
 verify_ssl = true
 
 [packages]
+fastapi = "*"
+uvicorn = "*"
+numpy = "*"
+opencv-python = "*"
+onnxruntime-gpu = "*"
+torch = "*"
+torchvision = "*"
+ultralytics = "*"
+onnx = "<2.0.0,>=1.12.0"
+onnxslim = ">=0.1.71"
+tensorrt = "==10.4.0"
+tensorrt-lean = "==10.4.0"
+tensorrt-dispatch = "==10.4.0"
+openvino = "*"
+pycuda = "*"
+nncf = "*"
 
 [dev-packages]
+pytest = "*"
 
 [requires]
 python_version = "3.10"

@@ -38,20 +38,33 @@ If the repo differs, follow existing conventions.
 
 ---
 
-## 3) Local Setup
+## 3) Python Runtime & Virtual Environment
+This project uses a **Pipenv-managed virtual environment**.  
+All agents must use the Python interpreter from the active Pipenv environment.
 
-### Python version
-- Use Python **3.10+** unless the project pins another version.
+### Active Python Interpreter
+`/home/hamza/.local/share/virtualenvs/ai-video-analytics-system-OAjovT-z/bin/python3`
 
-### Install
-- Prefer a virtualenv:
-  - `python -m venv .venv && source .venv/bin/activate`
-  - `pip install -r requirements.txt` (or `pip install -e .` if applicable)
+### How to Activate the Environment
+```bash
+pipenv shell
+```
+or explicitly:
+```bash
+source /home/hamza/.local/share/virtualenvs/ai-video-analytics-system-OAjovT-z/bin/activate
+```
 
-### Run (typical)
-- `python -m src.main --config configs/config.yaml`
+### Verification
+```bash
+which python3
+```
 
-If there is no `requirements.txt` yet, create one and keep dependencies minimal.
+⚠️ PyTorch CUDA wheels are installed using pip inside the Pipenv environment:
+```bash
+pipenv run pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
+```
+
+Agents must not use system Python or a different virtual environment when running, testing, or modifying this project.
 
 ---
 
