@@ -607,4 +607,5 @@ cython_debug/
 .idea/
 
 # Models
-models/
+models/*
+!models/models.json
