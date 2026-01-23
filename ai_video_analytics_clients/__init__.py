@@ -1,0 +1,2 @@
+from ai_video_analytics_clients.avas_client import AVASClient
+from ai_video_analytics_clients.avas_client_async import AVASClientAsync

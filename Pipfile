@@ -1,30 +1,39 @@
 [[source]]
-name = "pip_conf_index_global"
 url = "https://pypi.org/simple"
-verify_ssl = true
-
-[[source]]
-name = "nvidia_ngc"
-url = "https://pypi.ngc.nvidia.com"
-verify_ssl = true
+verify_ssl = false
+name = "pip_conf_index_global"
 
 [packages]
 fastapi = "*"
+fastapi-offline = "*"
 uvicorn = "*"
-numpy = "*"
+gunicorn = "*"
+aiofiles = "*"
+requests = "*"
+httpx = "*"
+python-multipart = "*"
+ujson = "*"
+msgpack = "*"
+tqdm = "*"
+icc-rt = "*"
+numpy = "<2"
+numba = "*"
 opencv-python = "*"
-onnxruntime-gpu = "*"
-torch = "*"
-torchvision = "*"
-ultralytics = "*"
+scikit-image = "*"
 onnx = "<2.0.0,>=1.12.0"
 onnxslim = ">=0.1.71"
-tensorrt = "==10.4.0"
-tensorrt-lean = "==10.4.0"
-tensorrt-dispatch = "==10.4.0"
-openvino = "*"
-pycuda = "*"
-nncf = "*"
+onnxruntime-gpu = "*"
+onnx-simplifier = "*"
+ultralytics = "*"
+torch = "*"
+torchvision = "*"
+exifread = "*"
+imageio = "*"
+tenacity = "*"
+colorlog = "*"
+pyturbojpeg = {git = "https://github.com/lilohuang/PyTurboJPEG.git"}
+tritonclient = {extras = ["grpc", "http"], version = "*"}
+aiohttp = "*"
 
 [dev-packages]
 pytest = "*"

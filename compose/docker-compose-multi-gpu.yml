@@ -1,0 +1,74 @@
+version: "3.5"
+
+services:
+  avas-trt-gpu0:
+    image: ai-video-analytics:${AVAS_VERSION}
+    build:
+      context: ../
+      dockerfile: dockerfiles/Dockerfile_trt
+    hostname: avas
+    env_file:
+      - .env
+    environment:
+      - MODELS_DIR=/models
+      - AVAS_MODELS_DIR=/models
+    volumes:
+      - ../models:/models
+      - ../ai_video_analytics:/app/ai_video_analytics
+      - ../entrypoint.sh:/app/entrypoint.sh
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:18080/health"]
+      interval: 300s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  avas-trt-gpu1:
+    image: ai-video-analytics:${AVAS_VERSION}
+    build:
+      context: ../
+      dockerfile: dockerfiles/Dockerfile_trt
+    hostname: avas
+    env_file:
+      - .env
+    environment:
+      - MODELS_DIR=/models
+      - AVAS_MODELS_DIR=/models
+    volumes:
+      - ../models:/models
+      - ../ai_video_analytics:/app/ai_video_analytics
+      - ../entrypoint.sh:/app/entrypoint.sh
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["1"]
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:18080/health"]
+      interval: 300s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  nginx:
+    image: nginx:1.21.0-alpine
+    container_name: nginx-avas
+    volumes:
+      - ../misc/nginx_conf/conf.d:/etc/nginx/conf.d
+    ports:
+      - 18080:18080
+    depends_on:
+      - avas-trt-gpu0
+    ulimits:
+      nofile:
+        soft: 200000
+        hard: 200000

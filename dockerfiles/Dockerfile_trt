@@ -1,0 +1,29 @@
+FROM nvcr.io/nvidia/tensorrt:24.05-py3
+
+ENV LC_ALL=C.UTF-8
+ENV LANG=C.UTF-8
+ENV PIP_INSTALL="python -m pip --no-cache-dir install --upgrade"
+
+RUN apt-get update &&\
+    apt-get install -y\
+            libgl1-mesa-glx \
+            protobuf-compiler \
+            libprotoc-dev \
+            libb64-0d \
+            libturbojpeg \
+            curl \
+            python3-opencv \
+            ffmpeg &&\
+    rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN $PIP_INSTALL -r requirements.txt
+# GPU specific packages
+RUN $PIP_INSTALL cupy-cuda12x pynvjpeg
+
+WORKDIR /app
+COPY ai_video_analytics /app/ai_video_analytics
+COPY entrypoint.sh /app/entrypoint.sh
+
+ENTRYPOINT [ "bash" ]
+CMD ["entrypoint.sh"]

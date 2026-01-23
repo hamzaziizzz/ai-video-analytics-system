@@ -1,0 +1,94 @@
+version: "3.9"
+
+x-base_service: &base_service
+  hostname: avas
+  environment:
+    - MODELS_DIR=/models
+    - AVAS_MODELS_DIR=/models
+  volumes:
+    - &models ../models:/models
+    - &app ../ai_video_analytics:/app/ai_video_analytics
+    - &entrypoint ../entrypoint.sh:/app/entrypoint.sh
+    - &v_nginx ../misc/nginx_conf/conf.d:/etc/nginx/conf.d
+  healthcheck:
+    test: ["CMD", "curl", "-f", "http://localhost:18080/health"]
+    interval: 300s
+    timeout: 10s
+    retries: 3
+    start_period: 30s
+
+services:
+  avas-trt-gpu0:
+    <<: *base_service
+    profiles: ["gpu", "mgpu"]
+    image: ai-video-analytics:${AVAS_VERSION}
+    build:
+      context: ../
+      dockerfile: dockerfiles/Dockerfile_trt
+    ports:
+      - "18081:18080"
+    env_file:
+      - .env
+    volumes:
+      - *app
+      - *entrypoint
+      - *models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: [gpu]
+
+  avas-trt-gpu1:
+    <<: *base_service
+    profiles: ["mgpu"]
+    image: ai-video-analytics:${AVAS_VERSION}
+    build:
+      context: ../
+      dockerfile: dockerfiles/Dockerfile_trt
+    env_file:
+      - .env
+    volumes:
+      - *app
+      - *entrypoint
+      - *models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["1"]
+              capabilities: [gpu]
+
+  avas-cpu:
+    <<: *base_service
+    profiles: ["cpu"]
+    image: ai-video-analytics:${AVAS_VERSION}-cpu
+    build:
+      context: ../
+      dockerfile: dockerfiles/Dockerfile_cpu
+    ports:
+      - "18081:18080"
+    env_file:
+      - cpu.env
+    volumes:
+      - *app
+      - *entrypoint
+      - *models
+
+  nginx:
+    profiles: ["mgpu"]
+    image: nginx:1.21.0-alpine
+    container_name: nginx-avas
+    volumes:
+      - *v_nginx
+    ports:
+      - 18080:18080
+    depends_on:
+      - avas-trt-gpu0
+    ulimits:
+      nofile:
+        soft: 200000
+        hard: 200000

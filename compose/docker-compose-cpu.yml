@@ -1,0 +1,18 @@
+services:
+  avas-cpu:
+    image: ai-video-analytics-cpu:${AVAS_VERSION}
+    build:
+      context: ../
+      dockerfile: dockerfiles/Dockerfile_cpu
+    hostname: avas
+    env_file:
+      - cpu.env
+    environment:
+      - MODELS_DIR=/models
+      - AVAS_MODELS_DIR=/models
+    volumes:
+      - ../models:/models
+      - ../ai_video_analytics:/app/ai_video_analytics
+      - ../entrypoint.sh:/app/entrypoint.sh
+    ports:
+      - 18081:18080
