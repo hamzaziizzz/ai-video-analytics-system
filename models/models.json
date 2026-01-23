@@ -1,0 +1,38 @@
+{
+  "yolov8x": {
+    "shape": [1, 3, 640, 640],
+    "reshape": true,
+    "allow_batching": true,
+    "in_package": false,
+    "function": "yolo",
+    "link": "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolov8x.pt",
+    "dl_type": "url"
+  },
+  "yolov10x": {
+    "shape": [1, 3, 640, 640],
+    "reshape": true,
+    "allow_batching": true,
+    "in_package": false,
+    "function": "yolo",
+    "link": "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolov10x.pt",
+    "dl_type": "url"
+  },
+  "yolo26x": {
+    "shape": [1, 3, 640, 640],
+    "reshape": true,
+    "allow_batching": true,
+    "in_package": false,
+    "function": "yolo",
+    "link": "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo26x.pt",
+    "dl_type": "url"
+  },
+  "yolo26l": {
+    "shape": [1, 3, 640, 640],
+    "reshape": true,
+    "allow_batching": true,
+    "in_package": false,
+    "function": "yolo",
+    "link": "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo26l.pt",
+    "dl_type": "url"
+  }
+}
