@@ -8,29 +8,28 @@ from fastapi import APIRouter, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import UJSONResponse
 from starlette.responses import PlainTextResponse, StreamingResponse
 
-from ai_video_analytics.schemas import Images, PeopleDraw, PeopleExtract
-from ai_video_analytics.core.processing import ProcessingDep
 from ai_video_analytics.api.routes.v1.msgpack import MsgpackRoute
 from ai_video_analytics.api.routes.v1.image_utils import tile_images
+from ai_video_analytics.core.processing import ProcessingDep
+from ai_video_analytics.schemas import Images, PoseExtract
 
 
 router = APIRouter(route_class=MsgpackRoute)
 
 
-@router.post("/detect", tags=["Detection"])
-async def extract(
-    data: PeopleExtract,
+@router.post("/pose/detect", tags=["Pose"])
+async def extract_pose(
+    data: PoseExtract,
     processing: ProcessingDep,
     accept: Optional[List[str]] = Header(None),
     content_type: Annotated[str | None, Header()] = None,
 ):
     """
-    Person detection endpoint accepts json with
+    Pose detection endpoint accepts json with
     parameters in following format:
 
        - **images**: dict containing either links or data lists. (*required*)
        - **threshold**: Detection threshold. Default: 0.6 (*optional*)
-       - **return_person_data**: Return crops encoded in base64. Default: False (*optional*)
        - **limit_people**: Maximum number of detections to be processed.  0 for unlimited number. Default: 0 (*optional*)
        - **verbose_timings**: Return all timings. Default: False (*optional*)
        - **msgpack**: Serialize output to msgpack format for transfer. Default: False (*optional*)
@@ -43,9 +42,8 @@ async def extract(
         b64_decode = True
         if content_type == "application/msgpack":
             b64_decode = False
-        output = await processing.extract(
+        output = await processing.extract_pose(
             data.images,
-            return_person_data=data.return_person_data,
             threshold=data.threshold,
             limit_people=data.limit_people,
             min_person_size=data.min_person_size,
@@ -53,7 +51,6 @@ async def extract(
             b64_decode=b64_decode,
             img_req_headers=data.img_req_headers,
         )
-
         if data.msgpack or "application/x-msgpack" in accept:
             return PlainTextResponse(msgpack.dumps(output, use_single_float=True), media_type="application/x-msgpack")
         return UJSONResponse(output)
@@ -61,45 +58,62 @@ async def extract(
         raise HTTPException(status_code=500, detail=str(exc))
 
 
-@router.post("/draw", tags=["Detection"])
-async def draw(data: PeopleDraw, processing: ProcessingDep):
+@router.post("/multipart/pose/detect", tags=["Pose"])
+async def extract_pose_upl(
+    processing: ProcessingDep,
+    files: List[UploadFile] = File(...),
+    threshold: float = Form(0.6),
+    limit_people: int = Form(0),
+    min_person_size: int = Form(0),
+    verbose_timings: bool = Form(False),
+    msgpack: bool = Form(False),
+    accept: Optional[List[str]] = Header(None),
+):
     """
-    Return image with drawn detections for testing purposes.
+    Pose detection endpoint accepts multipart data with
+    parameters in following format:
 
-       - **images**: dict containing either links or data lists. (*required*)
+       - **files**: Image file(s) (*required*)
        - **threshold**: Detection threshold. Default: 0.6 (*optional*)
-       - **draw_scores**: Draw detection scores Default: True (*optional*)
-       - **draw_sizes**: Draw detection sizes Default: True (*optional*)
        - **limit_people**: Maximum number of detections to be processed.  0 for unlimited number. Default: 0 (*optional*)
+       - **verbose_timings**: Return all timings. Default: False (*optional*)
+       - **msgpack**: Serialize output to msgpack format for transfer. Default: False (*optional*)
        \f
+
+       :return:
+       List[List[dict]]
     """
     try:
-        output = await processing.draw(
-            data.images,
-            threshold=data.threshold,
-            draw_scores=data.draw_scores,
-            limit_people=data.limit_people,
-            min_person_size=data.min_person_size,
-            draw_sizes=data.draw_sizes,
+        payloads = [await upload.read() for upload in files]
+        images = Images(data=payloads)
+        output = await processing.extract_pose(
+            images,
+            threshold=threshold,
+            limit_people=limit_people,
+            min_person_size=min_person_size,
+            verbose_timings=verbose_timings,
+            b64_decode=False,
         )
-        output.seek(0)
-        return StreamingResponse(output, media_type="image/png")
+        if msgpack or (accept and "application/x-msgpack" in accept):
+            return PlainTextResponse(msgpack.dumps(output, use_single_float=True), media_type="application/x-msgpack")
+        return UJSONResponse(output)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
 
-@router.post("/multipart/draw", tags=["Detection"])
-async def draw_upl(
+@router.post("/multipart/pose/draw", tags=["Pose"])
+async def draw_pose_upl(
     processing: ProcessingDep,
     files: List[UploadFile] = File(...),
     threshold: float = Form(0.6),
     draw_scores: bool = Form(True),
     draw_sizes: bool = Form(True),
     limit_people: int = Form(0),
-    use_rotation: bool = Form(False),
+    min_person_size: int = Form(0),
 ):
     """
-    Return image with drawn detections for testing purposes.
+    Pose draw endpoint accepts multipart data with
+    parameters in following format:
 
        - **files**: Image file(s) (*required*, multiple files return a tiled image)
        - **threshold**: Detection threshold. Default: 0.6 (*optional*)
@@ -111,12 +125,13 @@ async def draw_upl(
     try:
         if len(files) == 1:
             payload = await files[0].read()
-            output = await processing.draw(
+            output = await processing.draw_pose(
                 payload,
                 threshold=threshold,
                 draw_scores=draw_scores,
                 draw_sizes=draw_sizes,
                 limit_people=limit_people,
+                min_person_size=min_person_size,
                 multipart=True,
             )
             output.seek(0)
@@ -125,12 +140,13 @@ async def draw_upl(
         annotated = []
         for upload in files:
             payload = await upload.read()
-            output = await processing.draw(
+            output = await processing.draw_pose(
                 payload,
                 threshold=threshold,
                 draw_scores=draw_scores,
                 draw_sizes=draw_sizes,
                 limit_people=limit_people,
+                min_person_size=min_person_size,
                 multipart=True,
             )
             output.seek(0)
@@ -144,51 +160,5 @@ async def draw_upl(
         if not ok:
             raise RuntimeError("Failed to encode tiled image")
         return StreamingResponse(io.BytesIO(buffer.tobytes()), media_type="image/jpg")
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
-
-
-@router.post("/multipart/detect", tags=["Detection"])
-async def extract_upl(
-    processing: ProcessingDep,
-    files: List[UploadFile] = File(...),
-    threshold: float = Form(0.6),
-    return_person_data: bool = Form(False),
-    limit_people: int = Form(0),
-    min_person_size: int = Form(0),
-    verbose_timings: bool = Form(False),
-    msgpack: bool = Form(False),
-    accept: Optional[List[str]] = Header(None),
-):
-    """
-    Person detection endpoint accepts multipart data with
-    parameters in following format:
-
-       - **files**: Image file(s) (*required*)
-       - **threshold**: Detection threshold. Default: 0.6 (*optional*)
-       - **return_person_data**: Return crops encoded in base64. Default: False (*optional*)
-       - **limit_people**: Maximum number of detections to be processed.  0 for unlimited number. Default: 0 (*optional*)
-       - **verbose_timings**: Return all timings. Default: False (*optional*)
-       - **msgpack**: Serialize output to msgpack format for transfer. Default: False (*optional*)
-       \f
-
-       :return:
-       List[List[dict]]
-    """
-    try:
-        payloads = [await upload.read() for upload in files]
-        images = Images(data=payloads)
-        output = await processing.extract(
-            images,
-            return_person_data=return_person_data,
-            threshold=threshold,
-            limit_people=limit_people,
-            min_person_size=min_person_size,
-            verbose_timings=verbose_timings,
-            b64_decode=False,
-        )
-        if msgpack or (accept and "application/x-msgpack" in accept):
-            return PlainTextResponse(msgpack.dumps(output, use_single_float=True), media_type="application/x-msgpack")
-        return UJSONResponse(output)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))

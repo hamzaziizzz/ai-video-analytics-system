@@ -54,6 +54,7 @@ class DecodeWorkspace:
         self.class_ids: Optional[np.ndarray] = None
         self.dets: Optional[np.ndarray] = None
         self.row_index: Optional[np.ndarray] = None
+        self.indices: Optional[np.ndarray] = None
 
     def ensure(self, capacity: int, dtype: np.dtype) -> None:
         if self.capacity >= capacity and self.dtype == dtype:
@@ -65,6 +66,7 @@ class DecodeWorkspace:
         self.class_ids = np.zeros((self.capacity,), dtype=np.int32)
         self.dets = np.zeros((self.capacity, 5), dtype=dtype)
         self.row_index = np.arange(self.capacity, dtype=np.int32)
+        self.indices = np.zeros((self.capacity,), dtype=np.int32)
 
 
 def letterbox(image, new_shape: Tuple[int, int], color: Tuple[int, int, int] = (114, 114, 114)):
@@ -196,6 +198,69 @@ def rescale_boxes(boxes: np.ndarray, meta: PreprocessMeta) -> np.ndarray:
     return boxes
 
 
+def rescale_keypoints(keypoints: np.ndarray, meta: PreprocessMeta) -> np.ndarray:
+    """Reverse letterbox/resize scaling for keypoints."""
+    if keypoints.size == 0:
+        return keypoints
+
+    keypoints[..., 0] -= meta.pad_x
+    keypoints[..., 1] -= meta.pad_y
+    keypoints[..., 0] /= meta.scale_x
+    keypoints[..., 1] /= meta.scale_y
+
+    h, w = meta.orig_shape
+    keypoints[..., 0] = np.clip(keypoints[..., 0], 0, w)
+    keypoints[..., 1] = np.clip(keypoints[..., 1], 0, h)
+    return keypoints
+
+
+def _infer_kpt_dim(extra: int) -> Optional[int]:
+    if extra <= 0:
+        return None
+    if extra % 3 == 0:
+        return 3
+    if extra % 2 == 0:
+        return 2
+    return None
+
+
+def _choose_pose_layout(
+    pred_dim: int,
+    num_classes: int,
+    has_objectness: bool,
+) -> tuple[int, bool, Optional[int]]:
+    """Infer pose layout (classes/objectness/kpt_dim) from prediction width."""
+    candidates = []
+    class_candidates = [num_classes]
+    if num_classes != 1:
+        class_candidates.append(1)
+    for nc in class_candidates:
+        for obj_flag in (has_objectness, not has_objectness):
+            base = (5 + nc) if obj_flag else (4 + nc)
+            extra = pred_dim - base
+            kpt_dim = _infer_kpt_dim(extra) if extra >= 0 else None
+            if kpt_dim:
+                score = 0
+                if kpt_dim == 3:
+                    score += 2
+                if nc == num_classes:
+                    score += 1
+                if obj_flag == has_objectness:
+                    score += 1
+                candidates.append((score, nc, obj_flag, kpt_dim))
+    if not candidates:
+        return num_classes, has_objectness, None
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    _, nc, obj_flag, kpt_dim = candidates[0]
+    return nc, obj_flag, kpt_dim
+
+
+def _reshape_keypoints(flat: np.ndarray, kpt_dim: int) -> np.ndarray:
+    if kpt_dim <= 0:
+        return np.empty((flat.shape[0], 0, 0), dtype=flat.dtype)
+    return flat.reshape(flat.shape[0], -1, kpt_dim)
+
+
 @njit(cache=True)
 def _nms_numba(dets: np.ndarray, thresh: float) -> List[int]:
     x1 = dets[:, 0]
@@ -238,6 +303,7 @@ def _decode_candidates(
     out_boxes: np.ndarray,
     out_scores: np.ndarray,
     out_class_ids: np.ndarray,
+    out_indices: np.ndarray,
 ) -> int:
     count = 0
     filter_len = class_filter.shape[0]
@@ -283,6 +349,7 @@ def _decode_candidates(
         out_boxes[count, 3] = y + h / 2.0
         out_scores[count] = score
         out_class_ids[count] = max_idx
+        out_indices[count] = i
         count += 1
     return count
 
@@ -369,6 +436,7 @@ def decode_yolo_output(
     use_cupy_nms: bool = False,
     use_numba_decode: bool = False,
     workspace: Optional[DecodeWorkspace] = None,
+    return_keypoints: bool = False,
 ) -> List[Detection]:
     preds = output
     while preds.ndim > 2:
@@ -390,17 +458,27 @@ def decode_yolo_output(
     if preds.shape[1] < 6:
         return []
 
-    if end_to_end and preds.shape[1] != 6:
+    if end_to_end and preds.shape[1] < 6:
         end_to_end = False
     elif not end_to_end and preds.shape[1] == 6:
         end_to_end = True
 
+    if not end_to_end and return_keypoints and preds.shape[1] >= 6:
+        # NMS-exported pose models return (N, 6 + K*D); raw outputs have many more rows.
+        if preds.shape[0] <= preds.shape[1] * 10:
+            end_to_end = True
+
     class_filter = np.array(class_id_filter, dtype=int) if class_id_filter else None
 
     if end_to_end:
+        extra = preds.shape[1] - 6
+        kpt_dim = _infer_kpt_dim(extra) if return_keypoints else None
         boxes = preds[:, :4]
         scores = preds[:, 4]
         class_ids = preds[:, 5].astype(int)
+        kpts = None
+        if return_keypoints and kpt_dim:
+            kpts = _reshape_keypoints(preds[:, 6 : 6 + extra], kpt_dim)
 
         mask = scores >= confidence_threshold
         if class_filter is not None:
@@ -408,11 +486,15 @@ def decode_yolo_output(
         boxes = boxes[mask]
         scores = scores[mask]
         class_ids = class_ids[mask]
+        if kpts is not None:
+            kpts = kpts[mask]
 
         if boxes.size == 0:
             return []
 
         boxes = rescale_boxes(boxes, meta)
+        if kpts is not None:
+            kpts = rescale_keypoints(kpts, meta)
 
         detections: List[Detection] = []
         for idx in range(len(boxes)):
@@ -424,15 +506,26 @@ def decode_yolo_output(
                     score=float(scores[idx]),
                     class_id=class_id,
                     class_name=class_name,
+                    keypoints=kpts[idx].tolist() if kpts is not None else None,
                 )
             )
         return detections
 
     num_classes = len(labels)
+    if return_keypoints and num_classes <= 0:
+        num_classes = 1
     if num_classes <= 0:
         return []
     has_obj = has_objectness
-    if not has_objectness:
+    kpt_dim = None
+    kpts_raw = None
+    if return_keypoints:
+        num_classes, has_obj, kpt_dim = _choose_pose_layout(preds.shape[1], num_classes, has_obj)
+        base = (5 + num_classes) if has_obj else (4 + num_classes)
+        extra = preds.shape[1] - base
+        if kpt_dim and extra >= kpt_dim:
+            kpts_raw = preds[:, base : base + extra]
+    elif not has_objectness:
         expected = 5 + num_classes
         if preds.shape[1] == expected:
             has_obj = True
@@ -452,6 +545,7 @@ def decode_yolo_output(
             workspace.boxes,
             workspace.scores,
             workspace.class_ids,
+            workspace.indices,
         )
         if count == 0:
             return []
@@ -460,6 +554,9 @@ def decode_yolo_output(
         scores = workspace.scores[:count]
         class_ids = workspace.class_ids[:count]
         boxes_xyxy = rescale_boxes(boxes_xyxy, meta)
+        kpts = None
+        if kpts_raw is not None and kpt_dim and workspace.indices is not None:
+            kpts = _reshape_keypoints(kpts_raw[workspace.indices[:count]], kpt_dim)
 
         if use_cupy_nms and _HAS_CUPY:
             keep = _nms_cupy(boxes_xyxy, scores, nms_iou_threshold)
@@ -470,16 +567,20 @@ def decode_yolo_output(
         else:
             keep = _nms_numpy(boxes_xyxy, scores, nms_iou_threshold)
 
+        if kpts is not None:
+            kpts = rescale_keypoints(kpts[keep], meta)
+
         detections: List[Detection] = []
-        for idx in keep:
-            class_id = int(class_ids[idx])
+        for keep_idx, det_idx in enumerate(keep):
+            class_id = int(class_ids[det_idx])
             class_name = labels[class_id] if class_id < len(labels) else str(class_id)
             detections.append(
                 Detection(
-                    bbox=boxes_xyxy[idx].tolist(),
-                    score=float(scores[idx]),
+                    bbox=boxes_xyxy[det_idx].tolist(),
+                    score=float(scores[det_idx]),
                     class_id=class_id,
                     class_name=class_name,
+                    keypoints=kpts[keep_idx].tolist() if kpts is not None else None,
                 )
             )
         return detections
@@ -487,7 +588,7 @@ def decode_yolo_output(
     if has_obj:
         boxes = preds[:, :4]
         obj_conf = preds[:, 4]
-        class_scores = preds[:, 5:]
+        class_scores = preds[:, 5 : 5 + num_classes]
         class_ids = np.argmax(class_scores, axis=1)
         if workspace is not None and workspace.row_index is not None:
             row_index = workspace.row_index[: len(class_scores)]
@@ -497,7 +598,7 @@ def decode_yolo_output(
         scores = obj_conf * class_conf
     else:
         boxes = preds[:, :4]
-        class_scores = preds[:, 4:]
+        class_scores = preds[:, 4 : 4 + num_classes]
         class_ids = np.argmax(class_scores, axis=1)
         if workspace is not None and workspace.row_index is not None:
             row_index = workspace.row_index[: len(class_scores)]
@@ -511,6 +612,9 @@ def decode_yolo_output(
     boxes = boxes[mask]
     scores = scores[mask]
     class_ids = class_ids[mask]
+    kpts = None
+    if kpts_raw is not None and kpt_dim:
+        kpts = _reshape_keypoints(kpts_raw[mask], kpt_dim)
 
     if boxes.size == 0:
         return []
@@ -536,16 +640,20 @@ def decode_yolo_output(
     else:
         keep = _nms_numpy(boxes_xyxy, scores, nms_iou_threshold)
 
+    if kpts is not None:
+        kpts = rescale_keypoints(kpts[keep], meta)
+
     detections: List[Detection] = []
-    for idx in keep:
-        class_id = int(class_ids[idx])
+    for keep_idx, det_idx in enumerate(keep):
+        class_id = int(class_ids[det_idx])
         class_name = labels[class_id] if class_id < len(labels) else str(class_id)
         detections.append(
             Detection(
-                bbox=boxes_xyxy[idx].tolist(),
-                score=float(scores[idx]),
+                bbox=boxes_xyxy[det_idx].tolist(),
+                score=float(scores[det_idx]),
                 class_id=class_id,
                 class_name=class_name,
+                keypoints=kpts[keep_idx].tolist() if kpts is not None else None,
             )
         )
     return detections

@@ -42,6 +42,7 @@ class OnnxYoloEngine(InferenceEngine):
         debug_log_raw_interval_seconds: float,
         debug_log_raw_rows: int,
         debug_log_raw_cols: int,
+        return_keypoints: bool = False,
     ):
         self.model_path = model_path
         self.labels = labels
@@ -59,6 +60,7 @@ class OnnxYoloEngine(InferenceEngine):
         self.debug_log_raw_interval_seconds = debug_log_raw_interval_seconds
         self.debug_log_raw_rows = debug_log_raw_rows
         self.debug_log_raw_cols = debug_log_raw_cols
+        self.return_keypoints = bool(return_keypoints)
         self.session = None
         self.input_name = None
         self.input_dtype = np.float32
@@ -348,6 +350,7 @@ class OnnxYoloEngine(InferenceEngine):
                         output_layout=self.output_layout,
                         class_id_filter=self.class_id_filter,
                         use_cupy_nms=self.use_cupy_nms,
+                        return_keypoints=self.return_keypoints,
                     )
                 )
             return detections_batch
@@ -365,6 +368,7 @@ class OnnxYoloEngine(InferenceEngine):
                     output_layout=self.output_layout,
                     class_id_filter=self.class_id_filter,
                     use_cupy_nms=self.use_cupy_nms,
+                    return_keypoints=self.return_keypoints,
                 )
             )
         return detections_batch

@@ -38,6 +38,8 @@ class Models(BaseSettings):
     det_batch_size: int = 1
     force_fp16: bool = False
     triton_uri: Optional[str] = None
+    pose_detection: bool = False
+    pose_name: Optional[str] = None
 
     def apply_aliases(self) -> None:
         det_name = os.getenv("DETECTION_MODEL") or os.getenv("AVAS_DETECTION_MODEL")
@@ -59,6 +61,20 @@ class Models(BaseSettings):
                 self.force_fp16 = True
             elif normalized in {"0", "false", "no", "n", "off"}:
                 self.force_fp16 = False
+
+        pose_detection = os.getenv("POSE_DETECTION")
+        if pose_detection is not None:
+            normalized = pose_detection.strip().lower()
+            if normalized in {"1", "true", "yes", "y", "on"}:
+                self.pose_detection = True
+            elif normalized in {"0", "false", "no", "n", "off"}:
+                self.pose_detection = False
+
+        pose_name = os.getenv("POSE_DETECTION_MODEL")
+        if not pose_name:
+            pose_name = os.getenv("POSE_MODEL") or os.getenv("POSE_MODEL_PATH")
+        if pose_name:
+            self.pose_name = pose_name
 
 
 class Settings(BaseSettings):

@@ -1,7 +1,9 @@
 import asyncio
 import base64
+import copy
 import io
 import time
+from pathlib import Path
 from typing import Annotated, Dict, List, Optional
 
 import cv2
@@ -11,7 +13,7 @@ from fastapi import Depends
 from ai_video_analytics.schemas import Images
 from ai_video_analytics.settings import Settings
 
-from ai_video_analytics.core.inference.factory import create_engine
+from ai_video_analytics.core.inference.factory import create_engine, create_pose_engine
 from ai_video_analytics.core.inference.warmup import warmup_engine
 from ai_video_analytics.core.model_zoo.yolo import prepare_yolo_inference_assets
 from ai_video_analytics.core.settings import Settings as CoreSettings, build_default_config
@@ -19,8 +21,28 @@ from ai_video_analytics.core.utils.image_provider import get_images
 from ai_video_analytics.core.utils.logging import get_logger
 
 
+_COCO_SKELETON = (
+    (0, 1),
+    (0, 2),
+    (1, 3),
+    (2, 4),
+    (5, 6),
+    (5, 7),
+    (7, 9),
+    (6, 8),
+    (8, 10),
+    (5, 11),
+    (6, 12),
+    (11, 12),
+    (11, 13),
+    (13, 15),
+    (12, 14),
+    (14, 16),
+)
+
+
 class Processing:
-    """Core request handler for person detection and visualization."""
+    """Core request handler for person and pose detection."""
     def __init__(
         self,
         det_name: str = "yolo26x",
@@ -30,6 +52,8 @@ class Processing:
         force_fp16: bool = False,
         triton_uri=None,
         root_dir: str = "/models",
+        pose_enabled: bool = True,
+        pose_name: Optional[str] = None,
         **_kwargs,
     ) -> None:
         if max_size is None:
@@ -45,6 +69,12 @@ class Processing:
         self.dl_client = None
         self.engine = None
         self.config = None
+        self.pose_enabled = pose_enabled
+        self.pose_name = pose_name
+        self.pose_batch_size = self.max_det_batch_size
+        self.pose_max_size = list(self.max_size)
+        self.pose_engine = None
+        self.pose_config = None
         self.logger = get_logger("processing")
 
     async def start(self, dl_client=None):
@@ -98,6 +128,32 @@ class Processing:
             config.inference.warmup_iters,
             logger_name="processing.warmup",
         )
+
+        if self._pose_enabled():
+            pose_config = copy.deepcopy(config)
+            pose_config.models.detection_model = self.pose_name
+            if self.pose_name:
+                pose_path = Path(str(self.pose_name))
+                if pose_path.suffix or str(self.pose_name).strip().startswith(("/", ".")):
+                    pose_config.inference.model_path = str(pose_path)
+            self.pose_config = pose_config
+            prepare_yolo_inference_assets(pose_config)
+            self.pose_engine = create_pose_engine(pose_config.inference)
+            self.pose_engine.load()
+            pose_engine_name = type(self.pose_engine).__name__ if self.pose_engine else "unknown"
+            self.logger.info("Pose inference engine: %s", pose_engine_name)
+            self.pose_batch_size = pose_config.inference.batch_size
+            self.pose_max_size = [pose_config.inference.input_size[1], pose_config.inference.input_size[0]]
+            warmup_batch = min(pose_config.inference.warmup_batch_size, pose_config.inference.batch_size)
+            max_batch = getattr(self.pose_engine, "max_batch_size", warmup_batch)
+            warmup_batch = min(warmup_batch, max_batch)
+            warmup_engine(
+                self.pose_engine,
+                pose_config.inference.input_size,
+                warmup_batch,
+                pose_config.inference.warmup_iters,
+                logger_name="processing.pose_warmup",
+            )
 
     async def extract(
         self,
@@ -215,6 +271,145 @@ class Processing:
         output["took"]["total_ms"] = took * 1000
         if verbose_timings:
             output["took"]["read_imgs_ms"] = took_loading * 1000
+            output["took"]["pose_all_ms"] = took_detect * 1000
+            if pre_total_ms or infer_total_ms or decode_total_ms or post_total_ms:
+                output["took"]["pose_pre_ms"] = pre_total_ms
+                output["took"]["pose_infer_ms"] = infer_total_ms
+                output["took"]["pose_decode_ms"] = decode_total_ms
+                output["took"]["pose_post_ms"] = post_total_ms
+            if gpu_pre_total_ms or gpu_infer_total_ms:
+                output["took"]["pose_gpu_pre_ms"] = gpu_pre_total_ms
+                output["took"]["pose_gpu_infer_ms"] = gpu_infer_total_ms
+
+        for idx, entry in enumerate(image_entries):
+            item = {"status": "failed", "took_ms": 0.0, "people": []}
+            if entry.get("traceback") is not None:
+                item["traceback"] = entry.get("traceback")
+            else:
+                item["status"] = "ok"
+                item["people"] = detections_per_image.get(idx, [])
+                if idx in took_ms_per_image:
+                    item["took_ms"] = took_ms_per_image[idx]
+                if idx in took_breakdown_per_image:
+                    item["took_breakdown_ms"] = took_breakdown_per_image[idx]
+            output["data"].append(item)
+
+        return output
+
+    async def extract_pose(
+        self,
+        images: Images,
+        max_size: Optional[List[int]] = None,
+        threshold: float = 0.6,
+        limit_people: int = 0,
+        min_person_size: int = 0,
+        verbose_timings: bool = True,
+        b64_decode: bool = True,
+        img_req_headers: Optional[dict] = None,
+        **_kwargs,
+    ) -> Dict:
+        """Run pose detection on one or more images and return structured results."""
+        if img_req_headers is None:
+            img_req_headers = {}
+        if not max_size:
+            max_size = self.pose_max_size
+        if not self.pose_engine:
+            raise RuntimeError("Pose engine is not loaded")
+
+        t0 = time.time()
+        output = dict(took={}, data=[])
+
+        tl0 = time.time()
+        image_entries = await get_images(
+            images,
+            decode=True,
+            session=self.dl_client,
+            b64_decode=b64_decode,
+            headers=img_req_headers,
+        )
+        tl1 = time.time()
+        took_loading = tl1 - tl0
+
+        valid_images = []
+        index_map = []
+        for idx, entry in enumerate(image_entries):
+            if entry.get("traceback") is None and entry.get("data") is not None:
+                valid_images.append(entry["data"])
+                index_map.append(idx)
+
+        poses_per_image: Dict[int, List[dict]] = {}
+        took_ms_per_image: Dict[int, float] = {}
+        took_breakdown_per_image: Dict[int, Dict[str, float]] = {}
+        pre_total_ms = 0.0
+        infer_total_ms = 0.0
+        decode_total_ms = 0.0
+        post_total_ms = 0.0
+        gpu_pre_total_ms = 0.0
+        gpu_infer_total_ms = 0.0
+        te0 = time.time()
+        if valid_images and self.pose_engine:
+            for start in range(0, len(valid_images), self.pose_batch_size):
+                batch = valid_images[start : start + self.pose_batch_size]
+                tb0 = time.perf_counter()
+                pose_batches = self.pose_engine.infer_batch(batch)
+                batch_ms = (time.perf_counter() - tb0) * 1000
+                per_image_ms = batch_ms / max(1, len(batch))
+                batch_timings = getattr(self.pose_engine, "last_batch_timings", None)
+                per_pre_ms = None
+                per_infer_ms = None
+                per_decode_ms = None
+                per_gpu_pre_ms = None
+                per_gpu_infer_ms = None
+                if (
+                    isinstance(batch_timings, dict)
+                    and batch_timings.get("batch") == len(batch)
+                    and all(key in batch_timings for key in ("pre_ms", "infer_ms", "decode_ms"))
+                ):
+                    per_pre_ms = float(batch_timings["pre_ms"]) / max(1, len(batch))
+                    per_infer_ms = float(batch_timings["infer_ms"]) / max(1, len(batch))
+                    per_decode_ms = float(batch_timings["decode_ms"]) / max(1, len(batch))
+                    if batch_timings.get("gpu_pre_ms") is not None:
+                        per_gpu_pre_ms = float(batch_timings["gpu_pre_ms"]) / max(1, len(batch))
+                    if batch_timings.get("gpu_infer_ms") is not None:
+                        per_gpu_infer_ms = float(batch_timings["gpu_infer_ms"]) / max(1, len(batch))
+                for offset, dets in enumerate(pose_batches):
+                    img_index = index_map[start + offset]
+                    tp0 = time.perf_counter()
+                    poses_per_image[img_index] = self._serialize_pose_detections(
+                        dets,
+                        threshold=threshold,
+                        limit_people=limit_people,
+                        min_person_size=min_person_size,
+                    )
+                    post_ms = (time.perf_counter() - tp0) * 1000
+                    post_total_ms += post_ms
+                    if per_pre_ms is not None and per_infer_ms is not None and per_decode_ms is not None:
+                        total_ms = per_pre_ms + per_infer_ms + per_decode_ms + post_ms
+                        took_ms_per_image[img_index] = total_ms
+                        took_breakdown_per_image[img_index] = {
+                            "preproc_ms": per_pre_ms,
+                            "infer_ms": per_infer_ms,
+                            "decode_ms": per_decode_ms,
+                            "post_ms": post_ms,
+                            "total_ms": total_ms,
+                        }
+                        if per_gpu_pre_ms is not None:
+                            took_breakdown_per_image[img_index]["gpu_preproc_ms"] = per_gpu_pre_ms
+                            gpu_pre_total_ms += per_gpu_pre_ms
+                        if per_gpu_infer_ms is not None:
+                            took_breakdown_per_image[img_index]["gpu_infer_ms"] = per_gpu_infer_ms
+                            gpu_infer_total_ms += per_gpu_infer_ms
+                        pre_total_ms += per_pre_ms
+                        infer_total_ms += per_infer_ms
+                        decode_total_ms += per_decode_ms
+                    else:
+                        took_ms_per_image[img_index] = per_image_ms + post_ms
+                    await asyncio.sleep(0)
+        took_detect = time.time() - te0
+        took = time.time() - t0
+        output["took"]["total_ms"] = took * 1000
+        if verbose_timings:
+            output["took"]["read_imgs_ms"] = took_loading * 1000
             output["took"]["detect_all_ms"] = took_detect * 1000
             if pre_total_ms or infer_total_ms or decode_total_ms or post_total_ms:
                 output["took"]["detect_pre_ms"] = pre_total_ms
@@ -226,12 +421,12 @@ class Processing:
                 output["took"]["detect_gpu_infer_ms"] = gpu_infer_total_ms
 
         for idx, entry in enumerate(image_entries):
-            item = {"status": "failed", "took_ms": 0.0, "people": []}
+            item = {"status": "failed", "took_ms": 0.0, "poses": []}
             if entry.get("traceback") is not None:
                 item["traceback"] = entry.get("traceback")
             else:
                 item["status"] = "ok"
-                item["people"] = detections_per_image.get(idx, [])
+                item["poses"] = poses_per_image.get(idx, [])
                 if idx in took_ms_per_image:
                     item["took_ms"] = took_ms_per_image[idx]
                 if idx in took_breakdown_per_image:
@@ -273,6 +468,40 @@ class Processing:
             raise RuntimeError("Failed to encode result image")
         return io.BytesIO(buffer)
 
+    async def draw_pose(
+        self,
+        images: Images | bytes,
+        threshold: float = 0.6,
+        draw_scores: bool = True,
+        draw_sizes: bool = True,
+        limit_people: int = 0,
+        min_person_size: int = 0,
+        multipart: bool = False,
+        **_kwargs,
+    ) -> io.BytesIO:
+        """Return an annotated image with detected poses drawn."""
+        if not self.pose_engine:
+            raise RuntimeError("Pose detection engine is not initialized")
+
+        if not multipart:
+            image_entries = await get_images(images, session=self.dl_client)
+            image = image_entries[0].get("data") if image_entries else None
+        else:
+            data = np.frombuffer(images, np.uint8)
+            image = cv2.imdecode(data, cv2.IMREAD_COLOR)
+
+        if image is None:
+            raise RuntimeError("Failed to decode image")
+
+        dets = self.pose_engine.infer_batch([image])[0]
+        dets = self._filter_detections(dets, threshold, limit_people, min_person_size)
+        image = self._draw_pose_detections(image, dets, draw_scores=draw_scores, draw_sizes=draw_sizes)
+
+        is_success, buffer = cv2.imencode(".jpg", image)
+        if not is_success:
+            raise RuntimeError("Failed to encode result image")
+        return io.BytesIO(buffer)
+
     def _serialize_detections(
         self,
         dets,
@@ -298,6 +527,35 @@ class Processing:
             if return_person_data:
                 crop = image[max(y1, 0) : max(y2, 0), max(x1, 0) : max(x2, 0)]
                 item["persondata"] = _encode_crop(crop) if crop.size else None
+            results.append(item)
+        return results
+
+    def _serialize_pose_detections(
+        self,
+        dets,
+        threshold: float,
+        limit_people: int,
+        min_person_size: int,
+    ) -> List[dict]:
+        """Convert pose detections to the response-friendly dict structure."""
+        filtered = self._filter_detections(dets, threshold, limit_people, min_person_size)
+        total = len(filtered)
+        results: List[dict] = []
+        for det in filtered:
+            x1, y1, x2, y2 = [int(v) for v in det.bbox]
+            keypoints = det.keypoints
+            if isinstance(keypoints, np.ndarray):
+                keypoints = keypoints.tolist()
+            if keypoints is None:
+                keypoints = []
+            item = {
+                "bbox": [x1, y1, x2, y2],
+                "prob": float(det.score),
+                "class_id": int(det.class_id),
+                "class_name": det.class_name,
+                "keypoints": keypoints,
+                "num_det": total,
+            }
             results.append(item)
         return results
 
@@ -346,6 +604,73 @@ class Processing:
                 )
         return image
 
+    def _draw_pose_detections(self, image, detections, draw_scores: bool, draw_sizes: bool):
+        """Draw bounding boxes and keypoints on an image."""
+        for det in detections:
+            x1, y1, x2, y2 = [int(v) for v in det.bbox]
+            color = (0, 255, 0)
+            cv2.rectangle(image, (x1, y1), (x2, y2), color, 2)
+            if draw_scores:
+                label = f"{det.class_name} {det.score:.2f}"
+                cv2.putText(
+                    image,
+                    label,
+                    (x1, max(y1 - 5, 0)),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    color,
+                    1,
+                )
+            if draw_sizes:
+                size = int(x2 - x1)
+                label = f"w:{size}"
+                cv2.putText(
+                    image,
+                    label,
+                    (x1, min(y2 + 15, image.shape[0] - 5)),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    color,
+                    1,
+                )
+            keypoints = det.keypoints
+            if isinstance(keypoints, np.ndarray):
+                keypoints = keypoints.tolist()
+            if not keypoints:
+                continue
+            for kp in keypoints:
+                if not kp or len(kp) < 2:
+                    continue
+                if len(kp) >= 3 and kp[2] <= 0:
+                    continue
+                cv2.circle(image, (int(kp[0]), int(kp[1])), 2, (0, 0, 255), -1)
+            if len(keypoints) == 17:
+                for a, b in _COCO_SKELETON:
+                    kp_a = keypoints[a]
+                    kp_b = keypoints[b]
+                    if len(kp_a) < 2 or len(kp_b) < 2:
+                        continue
+                    if len(kp_a) >= 3 and kp_a[2] <= 0:
+                        continue
+                    if len(kp_b) >= 3 and kp_b[2] <= 0:
+                        continue
+                    cv2.line(
+                        image,
+                        (int(kp_a[0]), int(kp_a[1])),
+                        (int(kp_b[0]), int(kp_b[1])),
+                        (0, 255, 255),
+                        1,
+                    )
+        return image
+
+    def _pose_enabled(self) -> bool:
+        if not self.pose_enabled:
+            return False
+        if not self.pose_name:
+            return False
+        value = str(self.pose_name).strip().lower()
+        return value not in {"none", "off", "false", "0"}
+
 
 def _encode_crop(image: np.ndarray) -> str:
     ok, buffer = cv2.imencode(".jpg", image)
@@ -382,6 +707,8 @@ async def get_processing() -> Processing:
             force_fp16=settings.models.force_fp16,
             triton_uri=settings.models.triton_uri,
             root_dir="/models",
+            pose_enabled=settings.models.pose_detection,
+            pose_name=settings.models.pose_name,
         )
     return processing
 

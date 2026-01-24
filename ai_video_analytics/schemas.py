@@ -62,6 +62,41 @@ class PeopleExtract(BaseModel):
     )
 
 
+class PoseExtract(BaseModel):
+    images: Images
+
+    threshold: Optional[float] = pydantic.Field(
+        default=settings.defaults.det_thresh,
+        json_schema_extra={"example": settings.defaults.det_thresh},
+        description="Detector threshold",
+    )
+    limit_people: Optional[int] = pydantic.Field(
+        default=0,
+        json_schema_extra={"example": 0},
+        description="Maximum number of detections to return",
+    )
+    min_person_size: Optional[int] = pydantic.Field(
+        default=0,
+        json_schema_extra={"example": 0},
+        description="Ignore detections smaller than this size",
+    )
+    verbose_timings: Optional[bool] = pydantic.Field(
+        default=False,
+        json_schema_extra={"example": True},
+        description="Return all timings.",
+    )
+    msgpack: Optional[bool] = pydantic.Field(
+        default=False,
+        json_schema_extra={"example": False},
+        description="Use MSGPACK for response serialization",
+    )
+    img_req_headers: Optional[dict] = pydantic.Field(
+        default={},
+        json_schema_extra={"example": {}},
+        description="Custom headers for image retrieving from remote servers",
+    )
+
+
 class PeopleDraw(BaseModel):
     images: Images
 

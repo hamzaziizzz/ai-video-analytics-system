@@ -36,6 +36,7 @@ class TensorRTYoloEngine(InferenceEngine):
         dynamic_stride: int = 32,
         no_letterbox: bool = False,
         gpu_timing: bool = True,
+        return_keypoints: bool = False,
     ) -> None:
         self.engine_path = engine_path
         self.labels = labels
@@ -80,6 +81,7 @@ class TensorRTYoloEngine(InferenceEngine):
         self.dynamic_stride = int(dynamic_stride) if dynamic_stride else 32
         self.no_letterbox = bool(no_letterbox)
         self.gpu_timing = bool(gpu_timing)
+        self.return_keypoints = bool(return_keypoints)
         self._host_batch = None
         self._host_batch_shape = None
         self._gpu_upload = []
@@ -399,6 +401,7 @@ class TensorRTYoloEngine(InferenceEngine):
                         use_cupy_nms=self.use_cupy_nms,
                         use_numba_decode=self.use_numba_decode,
                         workspace=self._decode_workspace,
+                        return_keypoints=self.return_keypoints,
                     )
                 )
         else:
@@ -416,6 +419,7 @@ class TensorRTYoloEngine(InferenceEngine):
                     use_cupy_nms=self.use_cupy_nms,
                     use_numba_decode=self.use_numba_decode,
                     workspace=self._decode_workspace,
+                    return_keypoints=self.return_keypoints,
                 )
             )
         t_decode1 = time.perf_counter()

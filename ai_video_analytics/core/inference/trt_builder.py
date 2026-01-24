@@ -152,7 +152,7 @@ def _resolve_profile_shapes(
     batch_dim = input_shape[0]
     if batch_dim < 1:
         min_shape[0] = 1
-        opt_shape[0] = max_batch
+        opt_shape[0] = max(1, max_batch // 2)
         max_shape[0] = max_batch
     else:
         min_shape[0] = batch_dim

@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import List
+from typing import List, Optional
 
 
 @dataclass
@@ -8,6 +8,7 @@ class Detection:
     score: float
     class_id: int
     class_name: str
+    keypoints: Optional[List[List[float]]] = None
 
 
 class InferenceEngine:

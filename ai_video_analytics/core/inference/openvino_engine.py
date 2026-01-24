@@ -28,6 +28,7 @@ class OpenVINOYoloEngine(InferenceEngine):
         debug_log_raw_interval_seconds: float,
         debug_log_raw_rows: int,
         debug_log_raw_cols: int,
+        return_keypoints: bool = False,
     ) -> None:
         self.model_path = model_path
         self.labels = labels
@@ -44,6 +45,7 @@ class OpenVINOYoloEngine(InferenceEngine):
         self.debug_log_raw_interval_seconds = debug_log_raw_interval_seconds
         self.debug_log_raw_rows = debug_log_raw_rows
         self.debug_log_raw_cols = debug_log_raw_cols
+        self.return_keypoints = bool(return_keypoints)
         self.logger = get_logger("inference.openvino")
         self.compiled_model = None
         self.output_layer = None
@@ -116,6 +118,7 @@ class OpenVINOYoloEngine(InferenceEngine):
             output_layout=self.output_layout,
             class_id_filter=self.class_id_filter,
             use_cupy_nms=self.use_cupy_nms,
+            return_keypoints=self.return_keypoints,
         )
 
     def _normalize_device(self, device: str) -> str:

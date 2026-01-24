@@ -22,6 +22,8 @@ def prepare_yolo_inference_assets(config) -> None:
     trt_impl = (getattr(config.inference, "trt_implementation", "custom") or "custom").lower()
     model_ref = config.models.detection_model or config.inference.model_path
     model_path = Path(config.inference.model_path)
+    is_pose = _is_pose_model(model_ref)
+    dynamic_export = bool(config.inference.trt_dynamic_shapes or config.inference.batch_size > 1)
     expected_suffix = _expected_suffix(engine)
     explicit_path = _is_explicit_path(model_ref)
     if engine == "openvino" and explicit_path:
@@ -103,7 +105,7 @@ def prepare_yolo_inference_assets(config) -> None:
                 imgsz=_resolve_export_size(config),
                 batch_size=config.inference.batch_size,
                 nms=config.inference.trt_ultralytics_nms,
-                dynamic=config.inference.trt_dynamic_shapes,
+                dynamic=dynamic_export,
             )
             config.inference.model_path = str(exported_path)
             return
@@ -113,7 +115,10 @@ def prepare_yolo_inference_assets(config) -> None:
         if engine in {"tensorrt", "trt"}:
             onnx_dir = models_dir / "onnx"
             onnx_dir.mkdir(parents=True, exist_ok=True)
-            onnx_path = onnx_dir / f"{pt_path.stem}.onnx"
+            onnx_name = pt_path.stem
+            if config.inference.trt_dynamic_shapes:
+                onnx_name = f"{onnx_name}_dyn"
+            onnx_path = onnx_dir / f"{onnx_name}.onnx"
             if not onnx_path.exists():
                 export_yolo(
                     pt_path,
@@ -125,7 +130,8 @@ def prepare_yolo_inference_assets(config) -> None:
                     imgsz=_resolve_export_size(config),
                     batch_size=config.inference.batch_size,
                     opset=17,
-                    dynamic=config.inference.trt_dynamic_shapes,
+                    nms=not is_pose,
+                    dynamic=dynamic_export,
                 )
             from ..inference.trt_builder import build_trt_engine
 
@@ -156,7 +162,8 @@ def prepare_yolo_inference_assets(config) -> None:
                 int8=config.inference.int8,
                 imgsz=_resolve_export_size(config),
                 batch_size=config.inference.batch_size,
-                dynamic=config.inference.trt_dynamic_shapes,
+                nms=not is_pose,
+                dynamic=dynamic_export,
             )
             if engine == "openvino":
                 config.inference.model_path = str(output_path if output_path.exists() else exported_path)
@@ -296,6 +303,11 @@ def _normalize_model_name(model_ref: str) -> str:
     if name.endswith((".pt", ".onnx", ".engine", ".xml")):
         return Path(name).stem
     return name
+
+
+def _is_pose_model(model_ref: str) -> bool:
+    name = Path(model_ref).stem.lower()
+    return "pose" in name
 
 
 def _resolve_ultralytics_url(filename: str) -> str:
