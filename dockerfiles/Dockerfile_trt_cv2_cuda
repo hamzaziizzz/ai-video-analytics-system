@@ -1,0 +1,111 @@
+FROM nvcr.io/nvidia/tensorrt:24.05-py3
+
+ENV LC_ALL=C.UTF-8
+ENV LANG=C.UTF-8
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PIP_INSTALL="python -m pip --no-cache-dir install --upgrade"
+
+# ---- OpenCV build args ----
+ARG OPENCV_VERSION=4.11.0
+ARG CUDA_ARCH_BIN=8.9
+
+# ---- System deps ----
+# NOTE:
+# - We do NOT install python3-opencv (apt) because it's CPU-only and will conflict.
+# - We install build deps to compile OpenCV with CUDA.
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        # runtime deps you already had \
+        libgl1-mesa-glx \
+        protobuf-compiler \
+        libprotoc-dev \
+        libb64-0d \
+        libturbojpeg \
+        curl \
+        ffmpeg \
+        # OpenCV build deps
+        build-essential \
+        cmake \
+        git \
+        pkg-config \
+        python3-dev \
+        libgtk-3-dev \
+        libavcodec-dev \
+        libavformat-dev \
+        libswscale-dev \
+        libtbb-dev \
+        libjpeg-dev \
+        libpng-dev \
+        libtiff-dev \
+        libopenblas-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Ensure pip + numpy are available for OpenCV Python bindings
+RUN $PIP_INSTALL pip setuptools wheel && \
+    python -m pip --no-cache-dir install -U numpy
+
+# ---- Remove any CPU OpenCV wheels that might get pulled in accidentally later ----
+RUN python -m pip uninstall -y \
+        opencv-python \
+        opencv-python-headless \
+        opencv-contrib-python \
+        opencv-contrib-python-headless \
+    || true
+
+# ---- Build & install OpenCV with CUDA ----
+RUN set -eux; \
+    cd /opt; \
+    git clone --branch ${OPENCV_VERSION} --depth 1 https://github.com/opencv/opencv.git; \
+    git clone --branch ${OPENCV_VERSION} --depth 1 https://github.com/opencv/opencv_contrib.git; \
+    mkdir -p /opt/opencv/build; \
+    cd /opt/opencv/build; \
+    cmake \
+      -D CMAKE_BUILD_TYPE=Release \
+      -D CMAKE_INSTALL_PREFIX=/usr/local \
+      -D OPENCV_EXTRA_MODULES_PATH=/opt/opencv_contrib/modules \
+      -D BUILD_opencv_python2=OFF \
+      -D BUILD_opencv_python3=ON \
+      -D PYTHON3_EXECUTABLE=/usr/bin/python3 \
+      -D WITH_CUDA=ON \
+      -D WITH_CUDNN=ON \
+      -D OPENCV_DNN_CUDA=ON \
+      -D ENABLE_FAST_MATH=ON \
+      -D CUDA_FAST_MATH=ON \
+      -D WITH_CUBLAS=ON \
+      -D CUDA_ARCH_BIN=${CUDA_ARCH_BIN} \
+      -D BUILD_TESTS=OFF \
+      -D BUILD_PERF_TESTS=OFF \
+      -D BUILD_EXAMPLES=OFF \
+      -D BUILD_DOCS=OFF \
+      -D BUILD_JAVA=OFF \
+      -D BUILD_SHARED_LIBS=ON \
+      ..; \
+    make -j"$(nproc)"; \
+    make install; \
+    ldconfig; \
+    # quick sanity check \
+    python3 -c "import cv2; print('OpenCV:', cv2.__version__); print('CUDA devices:', cv2.cuda.getCudaEnabledDeviceCount()); print([l for l in cv2.getBuildInformation().splitlines() if 'NVIDIA CUDA' in l or 'cuDNN' in l])"; \
+    # cleanup sources to reduce image bloat \
+    rm -rf /opt/opencv /opt/opencv_contrib
+
+# ---- Python deps (ensure this doesn't overwrite OpenCV) ----
+COPY requirements.txt .
+
+# IMPORTANT:
+# If your requirements.txt contains opencv-python, remove it.
+# Otherwise pip will install the CPU wheel and overwrite your CUDA build.
+RUN grep -qiE '^opencv-python|^opencv-contrib-python|^opencv-python-headless|^opencv-contrib-python-headless' requirements.txt && \
+      (echo "ERROR: Remove opencv-python* from requirements.txt (CUDA OpenCV is built from source in the image)." && exit 1) \
+    || true
+
+RUN $PIP_INSTALL -Ir requirements.txt
+
+# GPU specific packages
+RUN $PIP_INSTALL cupy-cuda12x pynvjpeg
+
+WORKDIR /app
+COPY ai_video_analytics /app/ai_video_analytics
+COPY entrypoint.sh /app/entrypoint.sh
+
+ENTRYPOINT [ "bash" ]
+CMD ["entrypoint.sh"]

@@ -55,6 +55,9 @@ class DecodeWorkspace:
         self.dets: Optional[np.ndarray] = None
         self.row_index: Optional[np.ndarray] = None
         self.indices: Optional[np.ndarray] = None
+        self.kpts: Optional[np.ndarray] = None
+        self.kpts_shape: Optional[tuple[int, int, int]] = None
+        self.kpts_dtype: Optional[np.dtype] = None
 
     def ensure(self, capacity: int, dtype: np.dtype) -> None:
         if self.capacity >= capacity and self.dtype == dtype:
@@ -67,6 +70,14 @@ class DecodeWorkspace:
         self.dets = np.zeros((self.capacity, 5), dtype=dtype)
         self.row_index = np.arange(self.capacity, dtype=np.int32)
         self.indices = np.zeros((self.capacity,), dtype=np.int32)
+
+    def ensure_kpts(self, count: int, num_kpts: int, kpt_dim: int, dtype: np.dtype) -> None:
+        shape = (max(1, count), max(1, num_kpts), max(1, kpt_dim))
+        if self.kpts_shape == shape and self.kpts_dtype == dtype and self.kpts is not None:
+            return
+        self.kpts_shape = shape
+        self.kpts_dtype = dtype
+        self.kpts = np.zeros(shape, dtype=dtype)
 
 
 def letterbox(image, new_shape: Tuple[int, int], color: Tuple[int, int, int] = (114, 114, 114)):
@@ -259,6 +270,44 @@ def _reshape_keypoints(flat: np.ndarray, kpt_dim: int) -> np.ndarray:
     if kpt_dim <= 0:
         return np.empty((flat.shape[0], 0, 0), dtype=flat.dtype)
     return flat.reshape(flat.shape[0], -1, kpt_dim)
+
+
+@njit(cache=True)
+def _reshape_keypoints_numba(flat: np.ndarray, kpt_dim: int, out: np.ndarray) -> None:
+    n = flat.shape[0]
+    k = flat.shape[1] // kpt_dim
+    for i in range(n):
+        base = 0
+        for j in range(k):
+            for d in range(kpt_dim):
+                out[i, j, d] = flat[i, base + d]
+            base += kpt_dim
+
+
+@njit(cache=True)
+def _rescale_keypoints_numba(
+    keypoints: np.ndarray,
+    scale_x: float,
+    scale_y: float,
+    pad_x: float,
+    pad_y: float,
+    orig_h: int,
+    orig_w: int,
+) -> None:
+    for i in range(keypoints.shape[0]):
+        for j in range(keypoints.shape[1]):
+            x = (keypoints[i, j, 0] - pad_x) / scale_x
+            y = (keypoints[i, j, 1] - pad_y) / scale_y
+            if x < 0:
+                x = 0.0
+            elif x > orig_w:
+                x = float(orig_w)
+            if y < 0:
+                y = 0.0
+            elif y > orig_h:
+                y = float(orig_h)
+            keypoints[i, j, 0] = x
+            keypoints[i, j, 1] = y
 
 
 @njit(cache=True)
@@ -478,7 +527,18 @@ def decode_yolo_output(
         class_ids = preds[:, 5].astype(int)
         kpts = None
         if return_keypoints and kpt_dim:
-            kpts = _reshape_keypoints(preds[:, 6 : 6 + extra], kpt_dim)
+            kpts_flat = preds[:, 6 : 6 + extra]
+            if use_numba_decode and _HAS_NUMBA and workspace is not None:
+                num_kpts = kpts_flat.shape[1] // kpt_dim
+                workspace.ensure_kpts(kpts_flat.shape[0], num_kpts, kpt_dim, kpts_flat.dtype)
+                _reshape_keypoints_numba(
+                    kpts_flat,
+                    kpt_dim,
+                    workspace.kpts[: kpts_flat.shape[0], :num_kpts, :kpt_dim],
+                )
+                kpts = workspace.kpts[: kpts_flat.shape[0], :num_kpts, :kpt_dim]
+            else:
+                kpts = _reshape_keypoints(kpts_flat, kpt_dim)
 
         mask = scores >= confidence_threshold
         if class_filter is not None:
@@ -494,7 +554,18 @@ def decode_yolo_output(
 
         boxes = rescale_boxes(boxes, meta)
         if kpts is not None:
-            kpts = rescale_keypoints(kpts, meta)
+            if use_numba_decode and _HAS_NUMBA:
+                _rescale_keypoints_numba(
+                    kpts,
+                    meta.scale_x,
+                    meta.scale_y,
+                    meta.pad_x,
+                    meta.pad_y,
+                    meta.orig_shape[0],
+                    meta.orig_shape[1],
+                )
+            else:
+                kpts = rescale_keypoints(kpts, meta)
 
         detections: List[Detection] = []
         for idx in range(len(boxes)):
@@ -556,7 +627,31 @@ def decode_yolo_output(
         boxes_xyxy = rescale_boxes(boxes_xyxy, meta)
         kpts = None
         if kpts_raw is not None and kpt_dim and workspace.indices is not None:
-            kpts = _reshape_keypoints(kpts_raw[workspace.indices[:count]], kpt_dim)
+            selected = kpts_raw[workspace.indices[:count]]
+            num_kpts = selected.shape[1] // kpt_dim
+            workspace.ensure_kpts(selected.shape[0], num_kpts, kpt_dim, selected.dtype)
+            if use_numba_decode and _HAS_NUMBA:
+                _reshape_keypoints_numba(
+                    selected,
+                    kpt_dim,
+                    workspace.kpts[: selected.shape[0], :num_kpts, :kpt_dim],
+                )
+                kpts = workspace.kpts[: selected.shape[0], :num_kpts, :kpt_dim]
+            else:
+                kpts = _reshape_keypoints(selected, kpt_dim)
+        if kpts is not None:
+            if use_numba_decode and _HAS_NUMBA:
+                _rescale_keypoints_numba(
+                    kpts,
+                    meta.scale_x,
+                    meta.scale_y,
+                    meta.pad_x,
+                    meta.pad_y,
+                    meta.orig_shape[0],
+                    meta.orig_shape[1],
+                )
+            else:
+                kpts = rescale_keypoints(kpts, meta)
 
         if use_cupy_nms and _HAS_CUPY:
             keep = _nms_cupy(boxes_xyxy, scores, nms_iou_threshold)
@@ -568,7 +663,7 @@ def decode_yolo_output(
             keep = _nms_numpy(boxes_xyxy, scores, nms_iou_threshold)
 
         if kpts is not None:
-            kpts = rescale_keypoints(kpts[keep], meta)
+            kpts = kpts[keep]
 
         detections: List[Detection] = []
         for keep_idx, det_idx in enumerate(keep):
@@ -614,7 +709,18 @@ def decode_yolo_output(
     class_ids = class_ids[mask]
     kpts = None
     if kpts_raw is not None and kpt_dim:
-        kpts = _reshape_keypoints(kpts_raw[mask], kpt_dim)
+        selected = kpts_raw[mask]
+        num_kpts = selected.shape[1] // kpt_dim
+        if use_numba_decode and _HAS_NUMBA and workspace is not None:
+            workspace.ensure_kpts(selected.shape[0], num_kpts, kpt_dim, selected.dtype)
+            _reshape_keypoints_numba(
+                selected,
+                kpt_dim,
+                workspace.kpts[: selected.shape[0], :num_kpts, :kpt_dim],
+            )
+            kpts = workspace.kpts[: selected.shape[0], :num_kpts, :kpt_dim]
+        else:
+            kpts = _reshape_keypoints(selected, kpt_dim)
 
     if boxes.size == 0:
         return []
@@ -630,6 +736,19 @@ def decode_yolo_output(
     boxes_xyxy[:, 3] = boxes[:, 1] + boxes[:, 3] / 2
 
     boxes_xyxy = rescale_boxes(boxes_xyxy, meta)
+    if kpts is not None:
+        if use_numba_decode and _HAS_NUMBA:
+            _rescale_keypoints_numba(
+                kpts,
+                meta.scale_x,
+                meta.scale_y,
+                meta.pad_x,
+                meta.pad_y,
+                meta.orig_shape[0],
+                meta.orig_shape[1],
+            )
+        else:
+            kpts = rescale_keypoints(kpts, meta)
 
     if use_cupy_nms and _HAS_CUPY:
         keep = _nms_cupy(boxes_xyxy, scores, nms_iou_threshold)
@@ -641,7 +760,7 @@ def decode_yolo_output(
         keep = _nms_numpy(boxes_xyxy, scores, nms_iou_threshold)
 
     if kpts is not None:
-        kpts = rescale_keypoints(kpts[keep], meta)
+        kpts = kpts[keep]
 
     detections: List[Detection] = []
     for keep_idx, det_idx in enumerate(keep):
