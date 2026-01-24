@@ -1,6 +1,7 @@
 import logging
 import os
 import ssl
+import warnings
 from contextlib import asynccontextmanager
 
 import aiohttp
@@ -14,6 +15,12 @@ except ImportError:  # pragma: no cover - optional dependency
     FastAPIOffline = FastAPI
 
 from ai_video_analytics.api.routes import v1_router
+warnings.filterwarnings(
+    "ignore",
+    message=r"The value of the smallest subnormal.*",
+    category=UserWarning,
+)
+
 from ai_video_analytics.core.processing import get_processing
 from ai_video_analytics.logger import logger
 from ai_video_analytics.settings import Settings

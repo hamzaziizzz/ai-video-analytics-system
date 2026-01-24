@@ -1,5 +1,9 @@
 #!/bin/bash
 set -e
+
+# Suppress noisy NumPy subnormal warnings at startup.
+export PYTHONWARNINGS="${PYTHONWARNINGS:+$PYTHONWARNINGS,}ignore:The value of the smallest subnormal:UserWarning"
+
 echo Preparing models...
 python -m ai_video_analytics.prepare_models
 

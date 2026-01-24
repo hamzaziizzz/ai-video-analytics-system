@@ -27,6 +27,16 @@ class Settings(BaseSettings):
     fall_detection: Optional[bool] = None
     count: Optional[bool] = None
     inference_backend: Optional[str] = None
+    trt_implementation: Optional[str] = None
+    trt_gpu_preproc: Optional[bool] = None
+    trt_ultralytics_nms: Optional[bool] = None
+    trt_numba_decode: Optional[bool] = None
+    trt_dynamic_shapes: Optional[bool] = None
+    trt_dynamic_min_size: Optional[str] = None
+    trt_dynamic_max_size: Optional[str] = None
+    trt_dynamic_stride: Optional[int] = None
+    trt_no_letterbox: Optional[bool] = None
+    trt_gpu_timing: Optional[bool] = None
     num_workers: Optional[int] = None
     gpu_id: Optional[int] = None
     batch_size: Optional[int] = None
@@ -37,6 +47,7 @@ class Settings(BaseSettings):
     int8_calib_images: Optional[int] = None
     int8_calib_cache: Optional[str] = None
     use_nvjpeg: Optional[bool] = None
+    use_cupy_nms: Optional[bool] = None
     camera_urls: Optional[str] = None
     camera_ids: Optional[str] = None
     camera_fps_limit: Optional[float] = None
@@ -101,6 +112,16 @@ def build_default_config(settings: Settings) -> AppConfig:
         engine="ultralytics",
         model_path="models/yolo26x.pt",
         labels=[],
+        trt_implementation="custom",
+        trt_gpu_preproc=False,
+        trt_ultralytics_nms=False,
+        trt_numba_decode=True,
+        trt_dynamic_shapes=False,
+        trt_dynamic_min_size=None,
+        trt_dynamic_max_size=None,
+        trt_dynamic_stride=32,
+        trt_no_letterbox=False,
+        trt_gpu_timing=True,
         algorithm="YOLO",
         input_size=(640, 640),
         confidence_threshold=0.4,
@@ -108,6 +129,7 @@ def build_default_config(settings: Settings) -> AppConfig:
         device="auto",
         has_objectness=False,
         end_to_end=False,
+        use_cupy_nms=False,
     )
     people_count = PeopleCountConfig(
         min_count=1,
@@ -174,6 +196,11 @@ def apply_settings_overrides(config: AppConfig, settings: Settings) -> None:
     inference_backend = _env_str(settings.inference_backend, "INFERENCE_BACKEND")
     if inference_backend:
         config.inference.engine = _normalize_backend(inference_backend)
+    trt_impl = _env_str(settings.trt_implementation, "TRT_IMPLEMENTATION")
+    if not trt_impl:
+        trt_impl = _env_str(None, "TRT_BACKEND")
+    if trt_impl:
+        config.inference.trt_implementation = trt_impl.strip().lower()
     num_workers = _env_int(settings.num_workers, "NUM_WORKERS")
     if num_workers is not None:
         config.inference.workers = num_workers
@@ -249,8 +276,46 @@ def apply_settings_overrides(config: AppConfig, settings: Settings) -> None:
     use_nvjpeg = _env_bool(settings.use_nvjpeg, "USE_NVJPEG")
     if use_nvjpeg is not None:
         config.inference.use_nvjpeg = use_nvjpeg
+    use_cupy_nms = _env_bool(settings.use_cupy_nms, "USE_CUPY_NMS")
+    if use_cupy_nms is not None:
+        config.inference.use_cupy_nms = use_cupy_nms
+    trt_gpu_preproc = _env_bool(settings.trt_gpu_preproc, "TRT_GPU_PREPROC")
+    if trt_gpu_preproc is not None:
+        config.inference.trt_gpu_preproc = trt_gpu_preproc
+    trt_ultralytics_nms = _env_bool(settings.trt_ultralytics_nms, "TRT_ULTRALYTICS_NMS")
+    if trt_ultralytics_nms is not None:
+        config.inference.trt_ultralytics_nms = trt_ultralytics_nms
+    trt_numba_decode = _env_bool(settings.trt_numba_decode, "TRT_NUMBA_DECODE")
+    if trt_numba_decode is not None:
+        config.inference.trt_numba_decode = trt_numba_decode
+    trt_dynamic_shapes = _env_bool(settings.trt_dynamic_shapes, "TRT_DYNAMIC_SHAPES")
+    if trt_dynamic_shapes is not None:
+        config.inference.trt_dynamic_shapes = trt_dynamic_shapes
+    trt_dynamic_min = _env_str(settings.trt_dynamic_min_size, "TRT_DYNAMIC_MIN_SIZE")
+    if trt_dynamic_min:
+        parsed = _parse_size_list(trt_dynamic_min)
+        if parsed:
+            width, height = parsed
+            config.inference.trt_dynamic_min_size = (height, width)
+    trt_dynamic_max = _env_str(settings.trt_dynamic_max_size, "TRT_DYNAMIC_MAX_SIZE")
+    if trt_dynamic_max:
+        parsed = _parse_size_list(trt_dynamic_max)
+        if parsed:
+            width, height = parsed
+            config.inference.trt_dynamic_max_size = (height, width)
+    trt_dynamic_stride = _env_int(settings.trt_dynamic_stride, "TRT_DYNAMIC_STRIDE")
+    if trt_dynamic_stride is not None and trt_dynamic_stride > 0:
+        config.inference.trt_dynamic_stride = trt_dynamic_stride
+    trt_no_letterbox = _env_bool(settings.trt_no_letterbox, "TRT_NO_LETTERBOX")
+    if trt_no_letterbox is not None:
+        config.inference.trt_no_letterbox = trt_no_letterbox
+    trt_gpu_timing = _env_bool(settings.trt_gpu_timing, "TRT_GPU_TIMING")
+    if trt_gpu_timing is not None:
+        config.inference.trt_gpu_timing = trt_gpu_timing
     if config.inference.int8:
         config.inference.fp16 = False
+
+    _apply_trt_dynamic_defaults(config)
 
     algorithm = _env_str(settings.algorithm, "ALGORITHM")
     if algorithm:
@@ -491,6 +556,41 @@ def _camera_defaults(settings: Settings) -> Tuple[float, int, float, float]:
         max_backoff = 30.0
     return fps_limit, queue_size, min_backoff, max_backoff
 
+
+def _apply_trt_dynamic_defaults(config: AppConfig) -> None:
+    """Fill TRT dynamic shape defaults based on input_size to keep config simple.
+
+    Defaults are conservative (min=480, max=960 for 640 input) and aligned to stride.
+    """
+    inference = config.inference
+    if not inference.trt_dynamic_shapes:
+        return
+
+    stride = inference.trt_dynamic_stride or 32
+    stride = max(1, int(stride))
+    input_h, input_w = inference.input_size
+
+    def align_down(value: int) -> int:
+        if stride <= 1:
+            return value
+        return max(stride, (value // stride) * stride)
+
+    def align_up(value: int) -> int:
+        if stride <= 1:
+            return value
+        return int(((value + stride - 1) // stride) * stride)
+
+    if inference.trt_dynamic_min_size is None:
+        # Default min is half of opt size, aligned to stride.
+        min_h = align_down(max(stride, int(input_h * 0.5)))
+        min_w = align_down(max(stride, int(input_w * 0.5)))
+        inference.trt_dynamic_min_size = (min_h, min_w)
+    if inference.trt_dynamic_max_size is None:
+        # Default max is double the opt size, aligned to stride.
+        max_h = align_up(int(input_h * 2))
+        max_w = align_up(int(input_w * 2))
+        inference.trt_dynamic_max_size = (max_h, max_w)
+    inference.trt_dynamic_stride = stride
 
 def _load_camera_config(path: Path, defaults: Tuple[float, int, float, float]) -> Optional[Tuple[List[Dict], Dict[str, List[List[float]]]]]:
     if not path.exists():

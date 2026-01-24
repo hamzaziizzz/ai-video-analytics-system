@@ -249,7 +249,7 @@ class OnnxYoloEngine(InferenceEngine):
         for frame in frames:
             gpu_img, ratio, (dw, dh) = self._gpu_letterbox(frame, self.input_size)
             gpu_images.append(gpu_img)
-            metas.append(PreprocessMeta(scale=ratio, pad_x=dw, pad_y=dh, orig_shape=frame.shape[:2]))
+            metas.append(PreprocessMeta(scale_x=ratio, scale_y=ratio, pad_x=dw, pad_y=dh, orig_shape=frame.shape[:2]))
 
         gpu_batch = cp.stack(gpu_images, axis=0)
         gpu_batch = gpu_batch[..., ::-1]

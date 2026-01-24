@@ -4,7 +4,7 @@ from typing import List
 import numpy as np
 
 from .base import Detection, InferenceEngine
-from .yolo import decode_yolo_output, prepare_batch
+from .yolo import DecodeWorkspace, PreprocessMeta, decode_yolo_output, prepare_batch, prepare_batch_no_letterbox
 from ..utils.logging import get_logger
 
 
@@ -27,6 +27,15 @@ class TensorRTYoloEngine(InferenceEngine):
         debug_log_raw_interval_seconds: float,
         debug_log_raw_rows: int,
         debug_log_raw_cols: int,
+        use_cupy_nms: bool = False,
+        use_gpu_preproc: bool = False,
+        use_numba_decode: bool = True,
+        dynamic_shapes: bool = False,
+        dynamic_min_size: tuple[int, int] | None = None,
+        dynamic_max_size: tuple[int, int] | None = None,
+        dynamic_stride: int = 32,
+        no_letterbox: bool = False,
+        gpu_timing: bool = True,
     ) -> None:
         self.engine_path = engine_path
         self.labels = labels
@@ -62,7 +71,28 @@ class TensorRTYoloEngine(InferenceEngine):
         self._last_raw_log_ts = 0.0
         self.input_dtype = np.float32
         self.output_layout = ""
-        self.use_cupy_nms = True
+        self.use_cupy_nms = bool(use_cupy_nms)
+        self.use_gpu_preproc = bool(use_gpu_preproc)
+        self.use_numba_decode = bool(use_numba_decode)
+        self.dynamic_shapes = bool(dynamic_shapes)
+        self.dynamic_min_size = dynamic_min_size
+        self.dynamic_max_size = dynamic_max_size
+        self.dynamic_stride = int(dynamic_stride) if dynamic_stride else 32
+        self.no_letterbox = bool(no_letterbox)
+        self.gpu_timing = bool(gpu_timing)
+        self._host_batch = None
+        self._host_batch_shape = None
+        self._gpu_upload = []
+        self._gpu_letterbox = []
+        self._use_gpu_preproc = False
+        self._cv_stream = None
+        self._preproc_event = None
+        self._decode_workspace = DecodeWorkspace()
+        self.last_batch_timings = None
+        self._gpu_pre_start = None
+        self._gpu_pre_end = None
+        self._gpu_infer_start = None
+        self._gpu_infer_end = None
 
     def load(self) -> None:
         try:
@@ -80,6 +110,28 @@ class TensorRTYoloEngine(InferenceEngine):
                 device_id = 0
         cp.cuda.Device(device_id).use()
 
+        self._use_gpu_preproc = False
+        self._cv_stream = None
+        self._preproc_event = None
+        if self.use_gpu_preproc:
+            try:
+                import cv2
+
+                if hasattr(cv2, "cuda") and cv2.cuda.getCudaEnabledDeviceCount() > 0:
+                    self._use_gpu_preproc = True
+                else:
+                    self.logger.warning("TRT GPU preproc requested but OpenCV CUDA is unavailable; falling back to CPU.")
+            except Exception:
+                self.logger.warning("TRT GPU preproc requested but OpenCV is unavailable; falling back to CPU.")
+
+        if self._use_gpu_preproc:
+            try:
+                import cv2
+
+                self._cv_stream = cv2.cuda.Stream()
+            except Exception:
+                self._cv_stream = None
+
         logger = trt.Logger(trt.Logger.WARNING)
         with open(self.engine_path, "rb") as engine_file, trt.Runtime(logger) as runtime:
             self.engine = runtime.deserialize_cuda_engine(engine_file.read())
@@ -90,6 +142,30 @@ class TensorRTYoloEngine(InferenceEngine):
         self.context = self.engine.create_execution_context()
         self.stream = cp.cuda.Stream(non_blocking=True)
         self.is_trt10 = not hasattr(self.engine, "num_bindings")
+        if self._use_gpu_preproc and self._cv_stream is not None:
+            stream_ptr = None
+            for attr in ("cudaPtr", "ptr"):
+                if hasattr(self._cv_stream, attr):
+                    try:
+                        value = getattr(self._cv_stream, attr)
+                        stream_ptr = int(value() if callable(value) else value)
+                        break
+                    except Exception:
+                        continue
+            if stream_ptr:
+                self.stream = cp.cuda.ExternalStream(stream_ptr)
+            else:
+                self._cv_stream = None
+                self._preproc_event = cp.cuda.Event()
+        elif self._use_gpu_preproc:
+            self._preproc_event = cp.cuda.Event()
+
+        if self.gpu_timing:
+            # CUDA events provide GPU-side timings for preproc/infer stages.
+            self._gpu_pre_start = cp.cuda.Event()
+            self._gpu_pre_end = cp.cuda.Event()
+            self._gpu_infer_start = cp.cuda.Event()
+            self._gpu_infer_end = cp.cuda.Event()
 
         class HostDeviceMem:
             def __init__(self, size, dtype):
@@ -167,7 +243,7 @@ class TensorRTYoloEngine(InferenceEngine):
                     self.output_dtypes.append(dtype)
 
         self.logger.info("TensorRT using CUDA device: cuda:%d", device_id)
-        self.logger.info("Loaded TensorRT engine")
+        self.logger.info(f"Loaded TensorRT engine - {self.engine_path}")
         if self.fp16 or self.int8:
             self.logger.info(
                 "TensorRT precision requested fp16=%s int8=%s (engine must be built accordingly)",
@@ -194,6 +270,16 @@ class TensorRTYoloEngine(InferenceEngine):
         self.output_shapes = []
         self.outputs = []
         self.input = None
+        self._host_batch = None
+        self._host_batch_shape = None
+        self._gpu_upload = []
+        self._gpu_letterbox = []
+        self._cv_stream = None
+        self._preproc_event = None
+        self._gpu_pre_start = None
+        self._gpu_pre_end = None
+        self._gpu_infer_start = None
+        self._gpu_infer_end = None
 
     def _resolve_output_layout(self) -> str:
         try:
@@ -232,15 +318,28 @@ class TensorRTYoloEngine(InferenceEngine):
         if len(frames) > self.max_batch_size:
             raise RuntimeError(f"Batch size {len(frames)} exceeds engine max {self.max_batch_size}")
 
-        batch_imgs, metas = prepare_batch(frames, self.input_size)
-        with self.stream:
-            g_img = cp.asarray(batch_imgs)
-            g_img = g_img[..., ::-1]
-            g_img = cp.transpose(g_img, (0, 3, 1, 2))
-            g_img = cp.asarray(g_img, dtype=cp.float32) / 255.0
-            self.input.device[: g_img.size] = g_img.ravel()
-        infer_shape = tuple(g_img.shape)
+        t_pre0 = time.perf_counter()
+        gpu_pre_ms = None
+        if self._use_gpu_preproc:
+            try:
+                metas, infer_shape = self._prepare_batch_gpu(frames)
+            except Exception as exc:
+                self.logger.warning("TRT GPU preproc failed (%s); falling back to CPU.", exc)
+                self._use_gpu_preproc = False
+                self.stream = cp.cuda.Stream(non_blocking=True)
+                metas, infer_shape = self._prepare_batch_cpu(frames)
+        else:
+            metas, infer_shape = self._prepare_batch_cpu(frames)
+        t_pre1 = time.perf_counter()
+        if self.gpu_timing and self._use_gpu_preproc and self._gpu_pre_start is not None and self._gpu_pre_end is not None:
+            try:
+                gpu_pre_ms = float(cp.cuda.get_elapsed_time(self._gpu_pre_start, self._gpu_pre_end))
+            except Exception:
+                gpu_pre_ms = None
 
+        t_infer0 = time.perf_counter()
+        if self.gpu_timing and self._gpu_infer_start is not None:
+            self._gpu_infer_start.record(self.stream)
         if self.is_trt10:
             self.context.set_input_shape(self.input_name, infer_shape)
             for idx, name in enumerate(self.output_names):
@@ -249,6 +348,8 @@ class TensorRTYoloEngine(InferenceEngine):
             self.context.execute_async_v3(stream_handle=self.stream.ptr)
             for out in self.outputs:
                 out.copy_dtoh_async(self.stream)
+            if self.gpu_timing and self._gpu_infer_end is not None:
+                self._gpu_infer_end.record(self.stream)
             self.stream.synchronize()
             output_shapes = [tuple(self.context.get_tensor_shape(name)) for name in self.output_names]
             outputs = []
@@ -261,6 +362,8 @@ class TensorRTYoloEngine(InferenceEngine):
             self.context.execute_async_v2(bindings=self.bindings, stream_handle=self.stream.ptr)
             for out in self.outputs:
                 out.copy_dtoh_async(self.stream)
+            if self.gpu_timing and self._gpu_infer_end is not None:
+                self._gpu_infer_end.record(self.stream)
             self.stream.synchronize()
             output_shapes = [tuple(self.context.get_binding_shape(binding)) for binding in self.output_indices]
             outputs = []
@@ -268,9 +371,17 @@ class TensorRTYoloEngine(InferenceEngine):
                 shape = output_shapes[idx]
                 size = int(np.prod(shape))
                 outputs.append(out.host[:size].reshape(shape))
+        t_infer1 = time.perf_counter()
+        gpu_infer_ms = None
+        if self.gpu_timing and self._gpu_infer_start is not None and self._gpu_infer_end is not None:
+            try:
+                gpu_infer_ms = float(cp.cuda.get_elapsed_time(self._gpu_infer_start, self._gpu_infer_end))
+            except Exception:
+                gpu_infer_ms = None
 
         output = outputs[0] if outputs else np.array([])
         self._maybe_log_raw_output(output)
+        t_decode0 = time.perf_counter()
         batch_dets: List[List[Detection]] = []
         if output.ndim >= 3:
             for idx in range(len(frames)):
@@ -286,6 +397,8 @@ class TensorRTYoloEngine(InferenceEngine):
                         output_layout=self.output_layout,
                         class_id_filter=self.class_id_filter,
                         use_cupy_nms=self.use_cupy_nms,
+                        use_numba_decode=self.use_numba_decode,
+                        workspace=self._decode_workspace,
                     )
                 )
         else:
@@ -301,9 +414,279 @@ class TensorRTYoloEngine(InferenceEngine):
                     output_layout=self.output_layout,
                     class_id_filter=self.class_id_filter,
                     use_cupy_nms=self.use_cupy_nms,
+                    use_numba_decode=self.use_numba_decode,
+                    workspace=self._decode_workspace,
                 )
             )
+        t_decode1 = time.perf_counter()
+        self.last_batch_timings = {
+            "pre_ms": (t_pre1 - t_pre0) * 1000.0,
+            "infer_ms": (t_infer1 - t_infer0) * 1000.0,
+            "decode_ms": (t_decode1 - t_decode0) * 1000.0,
+            "gpu_pre_ms": gpu_pre_ms,
+            "gpu_infer_ms": gpu_infer_ms,
+            "batch": len(frames),
+        }
         return batch_dets
+
+    def _ensure_host_batch(self, batch_size: int, height: int, width: int) -> None:
+        """Allocate or reuse pinned host batch buffers for CPU preprocessing."""
+        if self._host_batch is not None and self._host_batch_shape:
+            if (
+                self._host_batch_shape[0] >= batch_size
+                and self._host_batch_shape[1] == height
+                and self._host_batch_shape[2] == width
+            ):
+                return
+        try:
+            import cupyx
+        except ImportError as exc:
+            raise RuntimeError("cupy is required for pinned host batch buffers") from exc
+        shape = (self.max_batch_size, height, width, 3)
+        self._host_batch = cupyx.zeros_pinned(shape, dtype=np.uint8)
+        self._host_batch_shape = shape
+
+    def _resolve_target_size(self, frames) -> tuple[int, int]:
+        """Choose target H/W for dynamic TRT, aligning to stride when enabled."""
+        if not self.dynamic_shapes:
+            return self.input_size
+
+        if self.no_letterbox:
+            heights = [int(frame.shape[0]) for frame in frames if frame is not None]
+            widths = [int(frame.shape[1]) for frame in frames if frame is not None]
+            if heights and widths:
+                target_h = max(1, max(heights))
+                target_w = max(1, max(widths))
+            else:
+                target_h, target_w = self.input_size
+        else:
+            target_h, target_w = self.input_size
+
+        target_h, target_w = self._align_hw(target_h, target_w)
+        target_h, target_w = self._clamp_hw(target_h, target_w)
+        return target_h, target_w
+
+    def _align_hw(self, height: int, width: int) -> tuple[int, int]:
+        """Align H/W to dynamic stride to keep feature map sizes consistent."""
+        stride = max(1, int(self.dynamic_stride))
+        if stride <= 1:
+            return height, width
+        aligned_h = int(np.ceil(height / stride) * stride)
+        aligned_w = int(np.ceil(width / stride) * stride)
+        return aligned_h, aligned_w
+
+    def _clamp_hw(self, height: int, width: int) -> tuple[int, int]:
+        """Clamp H/W to configured dynamic min/max sizes."""
+        if self.dynamic_min_size:
+            height = max(height, int(self.dynamic_min_size[0]))
+            width = max(width, int(self.dynamic_min_size[1]))
+        if self.dynamic_max_size:
+            height = min(height, int(self.dynamic_max_size[0]))
+            width = min(width, int(self.dynamic_max_size[1]))
+        return height, width
+
+    def _prepare_batch_cpu(self, frames) -> tuple[List[PreprocessMeta], tuple[int, int, int, int]]:
+        """Prepare CPU batch (letterbox or resize) and upload into TRT input buffer."""
+        try:
+            import cupy as cp
+        except ImportError as exc:
+            raise RuntimeError("CuPy is required for TensorRT preprocessing") from exc
+        target_hw = self._resolve_target_size(frames)
+        self._ensure_host_batch(len(frames), target_hw[0], target_hw[1])
+        if self.no_letterbox:
+            batch_imgs, metas = prepare_batch_no_letterbox(frames, target_hw, out=self._host_batch)
+        else:
+            batch_imgs, metas = prepare_batch(frames, target_hw, out=self._host_batch)
+        with self.stream:
+            g_img = cp.asarray(batch_imgs)
+            g_img = g_img[..., ::-1]
+            g_img = cp.transpose(g_img, (0, 3, 1, 2))
+            input_view = self.input.device[: g_img.size].reshape(g_img.shape)
+            if self.input_dtype != input_view.dtype:
+                input_view = input_view.astype(self.input_dtype, copy=False)
+            if input_view.dtype == np.uint8:
+                input_view[...] = g_img
+            else:
+                cp.multiply(g_img, (1.0 / 255.0), out=input_view)
+        return metas, tuple(g_img.shape)
+
+    def _ensure_gpu_buffers(self, batch_size: int) -> None:
+        if not self._use_gpu_preproc:
+            return
+        try:
+            import cv2
+        except Exception:
+            return
+        while len(self._gpu_upload) < batch_size:
+            self._gpu_upload.append(cv2.cuda_GpuMat())
+            self._gpu_letterbox.append(None)
+
+    def _prepare_batch_gpu(self, frames) -> tuple[List[PreprocessMeta], tuple[int, int, int, int]]:
+        """Prepare GPU batch using OpenCV CUDA, then normalize into TRT input buffer."""
+        try:
+            import cv2
+            import cupy as cp
+        except ImportError as exc:
+            raise RuntimeError("OpenCV CUDA and CuPy are required for TRT GPU preprocessing") from exc
+
+        batch = len(frames)
+        self._ensure_gpu_buffers(batch)
+        target_hw = self._resolve_target_size(frames)
+        height, width = target_hw
+        input_view = self.input.device[: batch * 3 * height * width].reshape((batch, 3, height, width))
+        scale = 1.0 / 255.0
+        metas: List[PreprocessMeta] = []
+
+        if self.gpu_timing and self._gpu_pre_start is not None:
+            self._gpu_pre_start.record(self.stream)
+
+        for idx, frame in enumerate(frames):
+            if frame is None:
+                raise ValueError("Frame is empty")
+            shape = frame.shape[:2]
+
+            gpu_src = self._gpu_upload[idx]
+            if self._cv_stream is not None:
+                gpu_src.upload(frame, self._cv_stream)
+            else:
+                gpu_src.upload(frame)
+
+            if self.no_letterbox:
+                scale_x = width / max(1, shape[1])
+                scale_y = height / max(1, shape[0])
+                if shape[0] != height or shape[1] != width:
+                    interp = cv2.INTER_AREA if scale_x < 1.0 or scale_y < 1.0 else cv2.INTER_LINEAR
+                    if self._cv_stream is not None:
+                        gpu_resized = cv2.cuda.resize(
+                            gpu_src, (width, height), interpolation=interp, stream=self._cv_stream
+                        )
+                    else:
+                        gpu_resized = cv2.cuda.resize(gpu_src, (width, height), interpolation=interp)
+                else:
+                    gpu_resized = gpu_src
+                gpu_letterbox = gpu_resized
+                pad_x = 0.0
+                pad_y = 0.0
+            else:
+                ratio = min(height / shape[0], width / shape[1])
+                new_unpad = (int(round(shape[1] * ratio)), int(round(shape[0] * ratio)))
+                dw = width - new_unpad[0]
+                dh = height - new_unpad[1]
+                pad_x = dw / 2.0
+                pad_y = dh / 2.0
+
+                if shape[::-1] != new_unpad:
+                    interp = cv2.INTER_AREA if ratio < 1.0 else cv2.INTER_LINEAR
+                    if self._cv_stream is not None:
+                        gpu_resized = cv2.cuda.resize(
+                            gpu_src, new_unpad, interpolation=interp, stream=self._cv_stream
+                        )
+                    else:
+                        gpu_resized = cv2.cuda.resize(gpu_src, new_unpad, interpolation=interp)
+                else:
+                    gpu_resized = gpu_src
+
+                top, bottom = int(round(pad_y - 0.1)), int(round(pad_y + 0.1))
+                left, right = int(round(pad_x - 0.1)), int(round(pad_x + 0.1))
+                if self._cv_stream is not None:
+                    gpu_letterbox = cv2.cuda.copyMakeBorder(
+                        gpu_resized,
+                        top,
+                        bottom,
+                        left,
+                        right,
+                        cv2.BORDER_CONSTANT,
+                        value=(114, 114, 114),
+                        stream=self._cv_stream,
+                    )
+                else:
+                    gpu_letterbox = cv2.cuda.copyMakeBorder(
+                        gpu_resized,
+                        top,
+                        bottom,
+                        left,
+                        right,
+                        cv2.BORDER_CONSTANT,
+                        value=(114, 114, 114),
+                    )
+                scale_x = ratio
+                scale_y = ratio
+
+            self._gpu_letterbox[idx] = gpu_letterbox
+            metas.append(
+                PreprocessMeta(
+                    scale_x=scale_x,
+                    scale_y=scale_y,
+                    pad_x=pad_x,
+                    pad_y=pad_y,
+                    orig_shape=shape,
+                )
+            )
+
+        if self._cv_stream is None and self._preproc_event is not None:
+            self._preproc_event.record(cp.cuda.Stream.null)
+            self.stream.wait_event(self._preproc_event)
+
+        with self.stream:
+            for idx in range(batch):
+                img = self._gpumat_to_cupy(self._gpu_letterbox[idx])
+                if img.ndim == 3 and img.shape[2] == 3:
+                    img = img[..., ::-1]
+                chw = cp.transpose(img, (2, 0, 1))
+                if input_view.dtype == np.uint8:
+                    input_view[idx] = chw
+                else:
+                    cp.multiply(chw, scale, out=input_view[idx])
+
+        if self.gpu_timing and self._gpu_pre_end is not None and self._gpu_pre_start is not None:
+            self._gpu_pre_end.record(self.stream)
+            self._gpu_pre_end.synchronize()
+
+        return metas, input_view.shape
+
+    def _gpumat_to_cupy(self, mat):
+        import cupy as cp
+
+        try:
+            rows = int(mat.rows)
+            cols = int(mat.cols)
+            if rows <= 0 or cols <= 0:
+                return cp.asarray([])
+            channels = int(mat.channels())
+            elem_size = int(mat.elemSize())
+            elem_size1 = int(mat.elemSize1())
+            depth = int(mat.depth())
+        except Exception:
+            return cp.asarray(mat.download())
+
+        try:
+            import cv2
+        except Exception:
+            return cp.asarray(mat.download())
+
+        depth_map = {
+            cv2.CV_8U: np.uint8,
+            cv2.CV_16U: np.uint16,
+            cv2.CV_32F: np.float32,
+            cv2.CV_64F: np.float64,
+        }
+        dtype = depth_map.get(depth)
+        if dtype is None:
+            return cp.asarray(mat.download())
+
+        try:
+            size_bytes = int(mat.step) * rows
+            mem = cp.cuda.UnownedMemory(int(mat.cudaPtr()), size_bytes, mat)
+            memptr = cp.cuda.MemoryPointer(mem, 0)
+            if channels > 1:
+                shape = (rows, cols, channels)
+                strides = (int(mat.step), elem_size, elem_size1)
+            else:
+                shape = (rows, cols)
+                strides = (int(mat.step), elem_size1)
+            return cp.ndarray(shape, dtype=dtype, memptr=memptr, strides=strides)
+        except Exception:
+            return cp.asarray(mat.download())
 
     def _maybe_log_raw_output(self, output: np.ndarray) -> None:
         if not self.debug_log_raw_output:

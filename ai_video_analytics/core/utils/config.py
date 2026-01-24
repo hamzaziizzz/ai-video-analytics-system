@@ -29,6 +29,16 @@ class InferenceConfig:
     engine: str
     model_path: str
     labels: List[str]
+    trt_implementation: str = "custom"
+    trt_gpu_preproc: bool = False
+    trt_ultralytics_nms: bool = False
+    trt_numba_decode: bool = True
+    trt_dynamic_shapes: bool = False
+    trt_dynamic_min_size: Optional[Tuple[int, int]] = None
+    trt_dynamic_max_size: Optional[Tuple[int, int]] = None
+    trt_dynamic_stride: int = 32
+    trt_no_letterbox: bool = False
+    trt_gpu_timing: bool = True
     algorithm: str = "YOLO"
     input_size: Tuple[int, int] = (640, 640)
     confidence_threshold: float = 0.4
@@ -56,6 +66,7 @@ class InferenceConfig:
     int8_calib_images: int = 300
     int8_calib_cache: Optional[str] = None
     use_nvjpeg: bool = False
+    use_cupy_nms: bool = False
     auto_fps_enabled: bool = False
     target_fps_per_stream: float = 20.0
     max_fps_per_stream: float = 30.0
@@ -215,10 +226,31 @@ def load_config(path: str) -> AppConfig:
     inference_raw = data.get("inference")
     if not inference_raw:
         raise ValueError("Config must include inference settings")
+    min_size_raw = inference_raw.get("trt_dynamic_min_size")
+    if isinstance(min_size_raw, (list, tuple)) and len(min_size_raw) == 2:
+        trt_dynamic_min_size = (int(min_size_raw[0]), int(min_size_raw[1]))
+    else:
+        trt_dynamic_min_size = None
+    max_size_raw = inference_raw.get("trt_dynamic_max_size")
+    if isinstance(max_size_raw, (list, tuple)) and len(max_size_raw) == 2:
+        trt_dynamic_max_size = (int(max_size_raw[0]), int(max_size_raw[1]))
+    else:
+        trt_dynamic_max_size = None
+
     inference = InferenceConfig(
         engine=inference_raw["engine"],
         model_path=inference_raw["model_path"],
         labels=inference_raw.get("labels", []),
+        trt_implementation=str(inference_raw.get("trt_implementation", "custom")),
+        trt_gpu_preproc=bool(inference_raw.get("trt_gpu_preproc", False)),
+        trt_ultralytics_nms=bool(inference_raw.get("trt_ultralytics_nms", False)),
+        trt_numba_decode=bool(inference_raw.get("trt_numba_decode", True)),
+        trt_dynamic_shapes=bool(inference_raw.get("trt_dynamic_shapes", False)),
+        trt_dynamic_min_size=trt_dynamic_min_size,
+        trt_dynamic_max_size=trt_dynamic_max_size,
+        trt_dynamic_stride=int(inference_raw.get("trt_dynamic_stride", 32)),
+        trt_no_letterbox=bool(inference_raw.get("trt_no_letterbox", False)),
+        trt_gpu_timing=bool(inference_raw.get("trt_gpu_timing", True)),
         algorithm=inference_raw.get("algorithm", "YOLO"),
         input_size=tuple(inference_raw.get("input_size", [640, 640])),
         confidence_threshold=float(inference_raw.get("confidence_threshold", 0.4)),
@@ -246,6 +278,7 @@ def load_config(path: str) -> AppConfig:
         int8_calib_images=int(inference_raw.get("int8_calib_images", 300)),
         int8_calib_cache=inference_raw.get("int8_calib_cache"),
         use_nvjpeg=bool(inference_raw.get("use_nvjpeg", False)),
+        use_cupy_nms=bool(inference_raw.get("use_cupy_nms", False)),
         auto_fps_enabled=bool(inference_raw.get("auto_fps_enabled", False)),
         target_fps_per_stream=float(inference_raw.get("target_fps_per_stream", 20.0)),
         max_fps_per_stream=float(inference_raw.get("max_fps_per_stream", 30.0)),

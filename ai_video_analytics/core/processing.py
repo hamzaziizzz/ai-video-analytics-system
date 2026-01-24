@@ -73,6 +73,21 @@ class Processing:
         prepare_yolo_inference_assets(config)
         self.engine = create_engine(config.inference)
         self.engine.load()
+        engine_name = type(self.engine).__name__ if self.engine else "unknown"
+        self.logger.info("Inference engine: %s", engine_name)
+        if config.inference.engine in {"tensorrt", "trt"} and self.engine:
+            self.logger.info(
+                "TRT runtime: impl=%s gpu_preproc=%s (active=%s) numba_decode=%s cupy_nms=%s dynamic_shapes=%s "
+                "no_letterbox=%s gpu_timing=%s",
+                config.inference.trt_implementation,
+                getattr(self.engine, "use_gpu_preproc", None),
+                getattr(self.engine, "_use_gpu_preproc", None),
+                getattr(self.engine, "use_numba_decode", None),
+                getattr(self.engine, "use_cupy_nms", None),
+                getattr(self.engine, "dynamic_shapes", None),
+                getattr(self.engine, "no_letterbox", None),
+                getattr(self.engine, "gpu_timing", None),
+            )
         warmup_batch = min(config.inference.warmup_batch_size, config.inference.batch_size)
         max_batch = getattr(self.engine, "max_batch_size", warmup_batch)
         warmup_batch = min(warmup_batch, max_batch)
@@ -127,6 +142,13 @@ class Processing:
 
         detections_per_image: Dict[int, List[dict]] = {}
         took_ms_per_image: Dict[int, float] = {}
+        took_breakdown_per_image: Dict[int, Dict[str, float]] = {}
+        pre_total_ms = 0.0
+        infer_total_ms = 0.0
+        decode_total_ms = 0.0
+        post_total_ms = 0.0
+        gpu_pre_total_ms = 0.0
+        gpu_infer_total_ms = 0.0
         te0 = time.time()
         if valid_images and self.engine:
             for start in range(0, len(valid_images), self.max_det_batch_size):
@@ -135,6 +157,24 @@ class Processing:
                 det_batches = self.engine.infer_batch(batch)
                 batch_ms = (time.perf_counter() - tb0) * 1000
                 per_image_ms = batch_ms / max(1, len(batch))
+                batch_timings = getattr(self.engine, "last_batch_timings", None)
+                per_pre_ms = None
+                per_infer_ms = None
+                per_decode_ms = None
+                per_gpu_pre_ms = None
+                per_gpu_infer_ms = None
+                if (
+                    isinstance(batch_timings, dict)
+                    and batch_timings.get("batch") == len(batch)
+                    and all(key in batch_timings for key in ("pre_ms", "infer_ms", "decode_ms"))
+                ):
+                    per_pre_ms = float(batch_timings["pre_ms"]) / max(1, len(batch))
+                    per_infer_ms = float(batch_timings["infer_ms"]) / max(1, len(batch))
+                    per_decode_ms = float(batch_timings["decode_ms"]) / max(1, len(batch))
+                    if batch_timings.get("gpu_pre_ms") is not None:
+                        per_gpu_pre_ms = float(batch_timings["gpu_pre_ms"]) / max(1, len(batch))
+                    if batch_timings.get("gpu_infer_ms") is not None:
+                        per_gpu_infer_ms = float(batch_timings["gpu_infer_ms"]) / max(1, len(batch))
                 for offset, dets in enumerate(det_batches):
                     img_index = index_map[start + offset]
                     tp0 = time.perf_counter()
@@ -147,7 +187,28 @@ class Processing:
                         return_person_data=return_person_data,
                     )
                     post_ms = (time.perf_counter() - tp0) * 1000
-                    took_ms_per_image[img_index] = per_image_ms + post_ms
+                    post_total_ms += post_ms
+                    if per_pre_ms is not None and per_infer_ms is not None and per_decode_ms is not None:
+                        total_ms = per_pre_ms + per_infer_ms + per_decode_ms + post_ms
+                        took_ms_per_image[img_index] = total_ms
+                        took_breakdown_per_image[img_index] = {
+                            "preproc_ms": per_pre_ms,
+                            "infer_ms": per_infer_ms,
+                            "decode_ms": per_decode_ms,
+                            "post_ms": post_ms,
+                            "total_ms": total_ms,
+                        }
+                        if per_gpu_pre_ms is not None:
+                            took_breakdown_per_image[img_index]["gpu_preproc_ms"] = per_gpu_pre_ms
+                            gpu_pre_total_ms += per_gpu_pre_ms
+                        if per_gpu_infer_ms is not None:
+                            took_breakdown_per_image[img_index]["gpu_infer_ms"] = per_gpu_infer_ms
+                            gpu_infer_total_ms += per_gpu_infer_ms
+                        pre_total_ms += per_pre_ms
+                        infer_total_ms += per_infer_ms
+                        decode_total_ms += per_decode_ms
+                    else:
+                        took_ms_per_image[img_index] = per_image_ms + post_ms
                     await asyncio.sleep(0)
         took_detect = time.time() - te0
         took = time.time() - t0
@@ -155,6 +216,14 @@ class Processing:
         if verbose_timings:
             output["took"]["read_imgs_ms"] = took_loading * 1000
             output["took"]["detect_all_ms"] = took_detect * 1000
+            if pre_total_ms or infer_total_ms or decode_total_ms or post_total_ms:
+                output["took"]["detect_pre_ms"] = pre_total_ms
+                output["took"]["detect_infer_ms"] = infer_total_ms
+                output["took"]["detect_decode_ms"] = decode_total_ms
+                output["took"]["detect_post_ms"] = post_total_ms
+            if gpu_pre_total_ms or gpu_infer_total_ms:
+                output["took"]["detect_gpu_pre_ms"] = gpu_pre_total_ms
+                output["took"]["detect_gpu_infer_ms"] = gpu_infer_total_ms
 
         for idx, entry in enumerate(image_entries):
             item = {"status": "failed", "took_ms": 0.0, "people": []}
@@ -165,6 +234,8 @@ class Processing:
                 item["people"] = detections_per_image.get(idx, [])
                 if idx in took_ms_per_image:
                     item["took_ms"] = took_ms_per_image[idx]
+                if idx in took_breakdown_per_image:
+                    item["took_breakdown_ms"] = took_breakdown_per_image[idx]
             output["data"].append(item)
 
         return output

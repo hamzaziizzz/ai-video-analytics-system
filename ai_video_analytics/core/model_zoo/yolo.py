@@ -1,7 +1,10 @@
+import json
 import os
 import shutil
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
+
+from onnxsim import simplify
 
 from ..utils.logging import get_logger
 from ..utils.model_assets import download_file
@@ -16,6 +19,7 @@ def prepare_yolo_inference_assets(config) -> None:
         return
 
     engine = config.inference.engine.lower()
+    trt_impl = (getattr(config.inference, "trt_implementation", "custom") or "custom").lower()
     model_ref = config.models.detection_model or config.inference.model_path
     model_path = Path(config.inference.model_path)
     expected_suffix = _expected_suffix(engine)
@@ -55,6 +59,13 @@ def prepare_yolo_inference_assets(config) -> None:
         gpu_id = _parse_gpu_id(config.inference.device)
         if gpu_id is None and engine in {"tensorrt", "trt"}:
             gpu_id = 0
+        extra_tags = []
+        if trt_impl in {"ultralytics", "ultra", "yolo"}:
+            extra_tags.append("ultralytics")
+        if config.inference.trt_dynamic_shapes:
+            extra_tags.append("dyn")
+        if not extra_tags:
+            extra_tags = None
         output_path = _resolve_output_path(
             model_path,
             pt_path,
@@ -65,12 +76,37 @@ def prepare_yolo_inference_assets(config) -> None:
             batch_size=config.inference.batch_size,
             fp16=config.inference.fp16,
             int8=config.inference.int8,
+            input_size=_resolve_export_size(config),
             prefer_model_path=explicit_path,
+            extra_tags=extra_tags,
         )
         if engine == "openvino":
             if output_path.exists():
                 config.inference.model_path = str(output_path)
                 return
+        elif output_path.exists():
+            if engine in {"tensorrt", "trt"} and trt_impl in {"ultralytics", "ultra", "yolo"}:
+                if _has_ultralytics_metadata(output_path):
+                    config.inference.model_path = str(output_path)
+                    return
+            else:
+                config.inference.model_path = str(output_path)
+                return
+        if engine in {"tensorrt", "trt"} and trt_impl in {"ultralytics", "ultra", "yolo"}:
+            exported_path = export_yolo(
+                pt_path,
+                output_path=output_path,
+                export_format="engine",
+                device=config.inference.device,
+                fp16=config.inference.fp16,
+                int8=config.inference.int8,
+                imgsz=_resolve_export_size(config),
+                batch_size=config.inference.batch_size,
+                nms=config.inference.trt_ultralytics_nms,
+                dynamic=config.inference.trt_dynamic_shapes,
+            )
+            config.inference.model_path = str(exported_path)
+            return
         elif output_path.exists():
             config.inference.model_path = str(output_path)
             return
@@ -86,9 +122,10 @@ def prepare_yolo_inference_assets(config) -> None:
                     device=config.inference.device,
                     fp16=config.inference.fp16,
                     int8=False,
-                    imgsz=config.inference.input_size,
+                    imgsz=_resolve_export_size(config),
                     batch_size=config.inference.batch_size,
                     opset=17,
+                    dynamic=config.inference.trt_dynamic_shapes,
                 )
             from ..inference.trt_builder import build_trt_engine
 
@@ -98,6 +135,10 @@ def prepare_yolo_inference_assets(config) -> None:
                 fp16=config.inference.fp16,
                 max_batch_size=config.inference.batch_size,
                 input_size=config.inference.input_size,
+                dynamic_shapes=config.inference.trt_dynamic_shapes,
+                dynamic_min_size=config.inference.trt_dynamic_min_size,
+                dynamic_max_size=config.inference.trt_dynamic_max_size,
+                dynamic_stride=config.inference.trt_dynamic_stride,
                 int8=config.inference.int8,
                 gpu_id=gpu_id or 0,
                 calib_data=Path(config.inference.int8_calib_data) if config.inference.int8_calib_data else None,
@@ -113,8 +154,9 @@ def prepare_yolo_inference_assets(config) -> None:
                 device=config.inference.device,
                 fp16=config.inference.fp16,
                 int8=config.inference.int8,
-                imgsz=config.inference.input_size,
+                imgsz=_resolve_export_size(config),
                 batch_size=config.inference.batch_size,
+                dynamic=config.inference.trt_dynamic_shapes,
             )
             if engine == "openvino":
                 config.inference.model_path = str(output_path if output_path.exists() else exported_path)
@@ -153,6 +195,8 @@ def export_yolo(
     imgsz,
     batch_size: int,
     opset: Optional[int] = None,
+    nms: bool = True,
+    dynamic: Optional[bool] = None,
 ) -> Path:
     logger = get_logger("models.export")
     try:
@@ -165,6 +209,8 @@ def export_yolo(
         raise RuntimeError("TensorRT export requires a CUDA-capable device")
 
     model = YOLO(str(model_path))
+    if dynamic is None:
+        dynamic = batch_size > 1
     export_kwargs = dict(
         format=export_format,
         half=fp16,
@@ -172,7 +218,9 @@ def export_yolo(
         device=resolved_device,
         imgsz=imgsz,
         batch=batch_size,
-        dynamic=batch_size > 1,
+        dynamic=bool(dynamic),
+        nms=bool(nms),
+        simplify=True,
         verbose=False,
     )
     if opset is not None and export_format == "onnx":
@@ -201,6 +249,14 @@ def export_yolo(
     return exported_path
 
 
+def _resolve_export_size(config) -> tuple[int, int]:
+    """Pick export size for dynamic TRT builds (max size to cover profile)."""
+    size = tuple(config.inference.input_size)
+    if config.inference.trt_dynamic_shapes and config.inference.trt_dynamic_max_size:
+        return tuple(config.inference.trt_dynamic_max_size)
+    return size
+
+
 def _relocate_onnx_artifact(model_path: Path, engine_path: Path) -> None:
     onnx_src = model_path.with_suffix(".onnx")
     if not onnx_src.exists():
@@ -216,6 +272,23 @@ def _relocate_onnx_artifact(model_path: Path, engine_path: Path) -> None:
 def _resolve_models_dir() -> Path:
     env_dir = os.environ.get("AVAS_MODELS_DIR") or os.environ.get("MODELS_DIR") or "models"
     return Path(env_dir).resolve()
+
+
+def _has_ultralytics_metadata(engine_path: Path) -> bool:
+    try:
+        with open(engine_path, "rb") as handle:
+            header = handle.read(4)
+            if len(header) != 4:
+                return False
+            meta_len = int.from_bytes(header, byteorder="little")
+            size = engine_path.stat().st_size
+            if meta_len <= 0 or meta_len > size - 4:
+                return False
+            meta_raw = handle.read(meta_len)
+        json.loads(meta_raw.decode("utf-8"))
+        return True
+    except Exception:
+        return False
 
 
 def _normalize_model_name(model_ref: str) -> str:
@@ -255,13 +328,15 @@ def _resolve_output_path(
     batch_size: int,
     fp16: bool,
     int8: bool,
+    input_size: Optional[tuple[int, int]],
     prefer_model_path: bool,
+    extra_tags: Optional[List[str]] = None,
 ) -> Path:
     if prefer_model_path and model_path.suffix and model_path.suffix == suffix:
         return model_path
     base_dir = models_dir
     if engine.lower() in {"tensorrt", "trt"}:
-        tag = _engine_tag(gpu_id, batch_size, fp16, int8)
+        tag = _engine_tag(gpu_id, batch_size, fp16, int8, input_size=input_size, extra_tags=extra_tags)
         return base_dir / "trt-engines" / f"{pt_path.stem}{tag}{suffix}"
     if engine.lower() == "onnx":
         return base_dir / "onnx" / f"{pt_path.stem}{suffix}"
@@ -282,16 +357,28 @@ def _expected_suffix(engine: str) -> str:
     return ".pt"
 
 
-def _engine_tag(gpu_id: Optional[int], batch_size: int, fp16: bool, int8: bool) -> str:
+def _engine_tag(
+    gpu_id: Optional[int],
+    batch_size: int,
+    fp16: bool,
+    int8: bool,
+    input_size: Optional[tuple[int, int]] = None,
+    extra_tags: Optional[List[str]] = None,
+) -> str:
     tags = []
     if gpu_id is not None:
         tags.append(f"gpu{gpu_id}")
     if batch_size and batch_size > 0:
         tags.append(f"bs{batch_size}")
+    if input_size:
+        height, width = input_size
+        tags.append(f"sz{width}x{height}")
     if fp16:
         tags.append("fp16")
     if int8:
         tags.append("int8")
+    if extra_tags:
+        tags.extend(tag for tag in extra_tags if tag)
     if not tags:
         return ""
     return "_" + "_".join(tags)

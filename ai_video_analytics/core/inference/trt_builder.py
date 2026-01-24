@@ -1,3 +1,4 @@
+import math
 import sys
 from pathlib import Path
 from typing import Iterable, List, Optional
@@ -117,11 +118,30 @@ def _collect_calibration_images(data_path: Path, limit: int) -> List[Path]:
     raise RuntimeError(f"Unsupported calibration data path: {data_path}")
 
 
+def _align_up(value: int, stride: int) -> int:
+    """Round value up to the next multiple of stride."""
+    if stride <= 1:
+        return value
+    return int(math.ceil(value / stride) * stride)
+
+
+def _align_down(value: int, stride: int) -> int:
+    """Round value down to the previous multiple of stride."""
+    if stride <= 1:
+        return value
+    return max(stride, int(math.floor(value / stride) * stride))
+
+
 def _resolve_profile_shapes(
     input_shape: List[int],
     max_batch: int,
     input_size: tuple[int, int],
+    dynamic_shapes: bool = False,
+    min_input_size: Optional[tuple[int, int]] = None,
+    max_input_size: Optional[tuple[int, int]] = None,
+    dynamic_stride: int = 32,
 ) -> tuple[tuple[int, ...], tuple[int, ...], tuple[int, ...]]:
+    """Build TRT min/opt/max profile shapes, optionally with dynamic H/W ranges."""
     if len(input_shape) < 4:
         raise RuntimeError(f"Unsupported ONNX input rank: {input_shape}")
 
@@ -140,6 +160,22 @@ def _resolve_profile_shapes(
         max_shape[0] = batch_dim
 
     h, w = input_size
+    min_h, min_w = min_input_size or input_size
+    max_h, max_w = max_input_size or input_size
+    if dynamic_shapes:
+        min_h = _align_down(min_h, dynamic_stride)
+        min_w = _align_down(min_w, dynamic_stride)
+        max_h = _align_up(max_h, dynamic_stride)
+        max_w = _align_up(max_w, dynamic_stride)
+        h = _align_up(h, dynamic_stride)
+        w = _align_up(w, dynamic_stride)
+        h = max(min_h, min(h, max_h))
+        w = max(min_w, min(w, max_w))
+    else:
+        min_h = h
+        min_w = w
+        max_h = h
+        max_w = w
     for idx, dim in enumerate(input_shape[1:], start=1):
         if dim >= 1:
             min_shape[idx] = dim
@@ -147,13 +183,13 @@ def _resolve_profile_shapes(
             max_shape[idx] = dim
             continue
         if idx == 2:
-            min_shape[idx] = h
+            min_shape[idx] = min_h
             opt_shape[idx] = h
-            max_shape[idx] = h
+            max_shape[idx] = max_h
         elif idx == 3:
-            min_shape[idx] = w
+            min_shape[idx] = min_w
             opt_shape[idx] = w
-            max_shape[idx] = w
+            max_shape[idx] = max_w
         else:
             min_shape[idx] = 1
             opt_shape[idx] = 1
@@ -168,12 +204,16 @@ def build_trt_engine(
     fp16: bool,
     max_batch_size: int,
     input_size: Optional[tuple[int, int]] = None,
+    dynamic_shapes: bool = False,
+    dynamic_min_size: Optional[tuple[int, int]] = None,
+    dynamic_max_size: Optional[tuple[int, int]] = None,
+    dynamic_stride: int = 32,
     int8: bool = False,
     gpu_id: int = 0,
     calib_data: Optional[Path] = None,
     calib_images: int = 300,
     calib_cache: Optional[Path] = None,
-    workspace_mb: int = 1024,
+    workspace_mb: int = 2048,
 ) -> None:
     logger = get_logger("inference.trt_builder")
     logger.info(
@@ -230,7 +270,15 @@ def build_trt_engine(
         input_shape = list(input_tensor.shape)
         if input_size is None:
             input_size = (640, 640)
-        min_shape, opt_shape, max_shape = _resolve_profile_shapes(input_shape, max_batch, input_size)
+        min_shape, opt_shape, max_shape = _resolve_profile_shapes(
+            input_shape,
+            max_batch,
+            input_size,
+            dynamic_shapes=dynamic_shapes,
+            min_input_size=dynamic_min_size,
+            max_input_size=dynamic_max_size,
+            dynamic_stride=dynamic_stride,
+        )
         profile = builder.create_optimization_profile()
         logger.info(
             "Optimization profile: min=%s opt=%s max=%s",
