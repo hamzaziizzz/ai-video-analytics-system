@@ -1,3 +1,13 @@
+# ---- PyTorch CUDA 12.4 wheels ----
+--index-url https://download.pytorch.org/whl/cu124
+--extra-index-url https://pypi.org/simple
+--extra-index-url https://pypi.ngc.nvidia.com
+
+torch==2.6.0
+torchvision==0.21.0
+torchaudio==2.6.0
+
+# ---- Web/API stack ----
 fastapi
 fastapi-offline
 uvicorn
@@ -8,23 +18,30 @@ httpx
 python-multipart
 ujson
 msgpack
-tqdm
-icc-rt
-numpy<2
-numba
-opencv-python
-scikit-image
-onnx<2.0.0,>=1.12.0
-onnxslim>=0.1.71
-onnxruntime-gpu
-onnx-simplifier
-ultralytics
-torch
-torchvision
-git+https://github.com/lilohuang/PyTurboJPEG.git
-exifread
-tritonclient[http,grpc]
-imageio
 aiohttp
 tenacity
 colorlog
+
+# ---- Core numeric / vision ----
+numpy
+numba
+scikit-image
+imageio
+exifread
+tqdm
+
+# ---- ONNX / TRT / inference ----
+onnx>=1.12.0,<2.0.0
+onnxslim>=0.1.71
+onnxruntime-gpu
+onnx-simplifier
+tritonclient[http,grpc]
+
+# ---- Deep learning / CV ----
+torchreid
+tensorboard
+gdown
+git+https://github.com/lilohuang/PyTurboJPEG.git
+
+# ---- Misc ----
+icc-rt

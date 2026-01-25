@@ -28,6 +28,8 @@ def create_engine(config: InferenceConfig):
             debug_log_raw_rows=config.debug_log_raw_rows,
             debug_log_raw_cols=config.debug_log_raw_cols,
             use_cupy_nms=config.use_cupy_nms,
+            use_numba_decode=config.trt_numba_decode,
+            use_gpu_preproc=config.trt_gpu_preproc,
         )
     if engine_name in {"trt", "tensorrt"}:
         trt_impl = (config.trt_implementation or "custom").strip().lower()
@@ -63,10 +65,6 @@ def create_engine(config: InferenceConfig):
             use_cupy_nms=config.use_cupy_nms,
             use_gpu_preproc=config.trt_gpu_preproc,
             use_numba_decode=config.trt_numba_decode,
-            dynamic_shapes=config.trt_dynamic_shapes,
-            dynamic_min_size=config.trt_dynamic_min_size,
-            dynamic_max_size=config.trt_dynamic_max_size,
-            dynamic_stride=config.trt_dynamic_stride,
             no_letterbox=config.trt_no_letterbox,
             gpu_timing=config.trt_gpu_timing,
         )
@@ -138,6 +136,9 @@ def create_pose_engine(config: InferenceConfig):
             debug_log_raw_interval_seconds=config.debug_log_raw_interval_seconds,
             debug_log_raw_rows=config.debug_log_raw_rows,
             debug_log_raw_cols=config.debug_log_raw_cols,
+            use_cupy_nms=config.use_cupy_nms,
+            use_numba_decode=config.trt_numba_decode,
+            use_gpu_preproc=config.trt_gpu_preproc,
             return_keypoints=True,
         )
     if engine_name in {"trt", "tensorrt"}:
@@ -174,10 +175,6 @@ def create_pose_engine(config: InferenceConfig):
             use_cupy_nms=config.use_cupy_nms,
             use_gpu_preproc=config.trt_gpu_preproc,
             use_numba_decode=config.trt_numba_decode,
-            dynamic_shapes=config.trt_dynamic_shapes,
-            dynamic_min_size=config.trt_dynamic_min_size,
-            dynamic_max_size=config.trt_dynamic_max_size,
-            dynamic_stride=config.trt_dynamic_stride,
             no_letterbox=config.trt_no_letterbox,
             gpu_timing=config.trt_gpu_timing,
             return_keypoints=True,

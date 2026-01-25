@@ -1,4 +1,4 @@
-from typing import Optional, List
+from typing import Optional, List, Union
 
 import pydantic
 from pydantic import BaseModel
@@ -45,6 +45,11 @@ class PeopleExtract(BaseModel):
         json_schema_extra={"example": 0},
         description="Ignore detections smaller than this size",
     )
+    reset_tracking: Optional[bool] = pydantic.Field(
+        default=False,
+        json_schema_extra={"example": False},
+        description="Reset tracker state before processing this request",
+    )
     verbose_timings: Optional[bool] = pydantic.Field(
         default=False,
         json_schema_extra={"example": True},
@@ -79,6 +84,11 @@ class PoseExtract(BaseModel):
         default=0,
         json_schema_extra={"example": 0},
         description="Ignore detections smaller than this size",
+    )
+    reset_tracking: Optional[bool] = pydantic.Field(
+        default=False,
+        json_schema_extra={"example": False},
+        description="Reset tracker state before processing this request",
     )
     verbose_timings: Optional[bool] = pydantic.Field(
         default=False,
@@ -124,4 +134,87 @@ class PeopleDraw(BaseModel):
         default=0,
         json_schema_extra={"example": 0},
         description="Ignore detections smaller than this size",
+    )
+
+
+class PoseDraw(BaseModel):
+    images: Images
+
+    threshold: Optional[float] = pydantic.Field(
+        default=settings.defaults.det_thresh,
+        json_schema_extra={"example": settings.defaults.det_thresh},
+        description="Detector threshold",
+    )
+    draw_scores: Optional[bool] = pydantic.Field(
+        default=True,
+        json_schema_extra={"example": True},
+        description="Draw detection scores",
+    )
+    draw_sizes: Optional[bool] = pydantic.Field(
+        default=True,
+        json_schema_extra={"example": True},
+        description="Draw detection sizes",
+    )
+    limit_people: Optional[int] = pydantic.Field(
+        default=0,
+        json_schema_extra={"example": 0},
+        description="Maximum number of detections to return",
+    )
+    min_person_size: Optional[int] = pydantic.Field(
+        default=0,
+        json_schema_extra={"example": 0},
+        description="Ignore detections smaller than this size",
+    )
+
+
+class TrackingStream(BaseModel):
+    source: Union[str, int] = pydantic.Field(
+        ...,
+        json_schema_extra={"example": 0},
+        description="Camera index, file path, or HTTP/RTSP URL",
+    )
+    pose: Optional[bool] = pydantic.Field(
+        default=False,
+        json_schema_extra={"example": False},
+        description="Use pose detection instead of person detection",
+    )
+    threshold: Optional[float] = pydantic.Field(
+        default=settings.defaults.det_thresh,
+        json_schema_extra={"example": settings.defaults.det_thresh},
+        description="Detector threshold",
+    )
+    draw_scores: Optional[bool] = pydantic.Field(
+        default=True,
+        json_schema_extra={"example": True},
+        description="Draw detection scores",
+    )
+    draw_sizes: Optional[bool] = pydantic.Field(
+        default=True,
+        json_schema_extra={"example": True},
+        description="Draw detection sizes",
+    )
+    limit_people: Optional[int] = pydantic.Field(
+        default=0,
+        json_schema_extra={"example": 0},
+        description="Maximum number of detections to return",
+    )
+    min_person_size: Optional[int] = pydantic.Field(
+        default=0,
+        json_schema_extra={"example": 0},
+        description="Ignore detections smaller than this size",
+    )
+    fps_limit: Optional[float] = pydantic.Field(
+        default=0.0,
+        json_schema_extra={"example": 0.0},
+        description="Output FPS limit. Use 0 to disable throttling",
+    )
+    jpeg_quality: Optional[int] = pydantic.Field(
+        default=80,
+        json_schema_extra={"example": 80},
+        description="JPEG quality for MJPEG streaming",
+    )
+    show_fps: Optional[bool] = pydantic.Field(
+        default=True,
+        json_schema_extra={"example": True},
+        description="Overlay FPS on the stream",
     )

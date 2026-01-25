@@ -36,6 +36,7 @@ class Models(BaseSettings):
     det_name: str = "yolo26x"
     max_size: Union[StrToIntList, List[int]] = [640, 640]
     det_batch_size: int = 1
+    pose_batch_size: Optional[int] = None
     force_fp16: bool = False
     triton_uri: Optional[str] = None
     pose_detection: bool = False
@@ -51,6 +52,9 @@ class Models(BaseSettings):
         det_bs = os.getenv("DET_BATCH_SIZE") or os.getenv("BATCH_SIZE") or os.getenv("AVAS_BATCH_SIZE")
         if det_bs and det_bs.isdigit():
             self.det_batch_size = int(det_bs)
+        pose_bs = os.getenv("POSE_BATCH_SIZE")
+        if pose_bs and pose_bs.isdigit():
+            self.pose_batch_size = int(pose_bs)
         max_size = os.getenv("MAX_SIZE")
         if max_size:
             self.max_size = str_to_int_list(max_size)

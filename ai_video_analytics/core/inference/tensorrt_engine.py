@@ -30,10 +30,6 @@ class TensorRTYoloEngine(InferenceEngine):
         use_cupy_nms: bool = False,
         use_gpu_preproc: bool = False,
         use_numba_decode: bool = True,
-        dynamic_shapes: bool = False,
-        dynamic_min_size: tuple[int, int] | None = None,
-        dynamic_max_size: tuple[int, int] | None = None,
-        dynamic_stride: int = 32,
         no_letterbox: bool = False,
         gpu_timing: bool = True,
         return_keypoints: bool = False,
@@ -75,10 +71,6 @@ class TensorRTYoloEngine(InferenceEngine):
         self.use_cupy_nms = bool(use_cupy_nms)
         self.use_gpu_preproc = bool(use_gpu_preproc)
         self.use_numba_decode = bool(use_numba_decode)
-        self.dynamic_shapes = bool(dynamic_shapes)
-        self.dynamic_min_size = dynamic_min_size
-        self.dynamic_max_size = dynamic_max_size
-        self.dynamic_stride = int(dynamic_stride) if dynamic_stride else 32
         self.no_letterbox = bool(no_letterbox)
         self.gpu_timing = bool(gpu_timing)
         self.return_keypoints = bool(return_keypoints)
@@ -450,52 +442,13 @@ class TensorRTYoloEngine(InferenceEngine):
         self._host_batch = cupyx.zeros_pinned(shape, dtype=np.uint8)
         self._host_batch_shape = shape
 
-    def _resolve_target_size(self, frames) -> tuple[int, int]:
-        """Choose target H/W for dynamic TRT, aligning to stride when enabled."""
-        if not self.dynamic_shapes:
-            return self.input_size
-
-        if self.no_letterbox:
-            heights = [int(frame.shape[0]) for frame in frames if frame is not None]
-            widths = [int(frame.shape[1]) for frame in frames if frame is not None]
-            if heights and widths:
-                target_h = max(1, max(heights))
-                target_w = max(1, max(widths))
-            else:
-                target_h, target_w = self.input_size
-        else:
-            target_h, target_w = self.input_size
-
-        target_h, target_w = self._align_hw(target_h, target_w)
-        target_h, target_w = self._clamp_hw(target_h, target_w)
-        return target_h, target_w
-
-    def _align_hw(self, height: int, width: int) -> tuple[int, int]:
-        """Align H/W to dynamic stride to keep feature map sizes consistent."""
-        stride = max(1, int(self.dynamic_stride))
-        if stride <= 1:
-            return height, width
-        aligned_h = int(np.ceil(height / stride) * stride)
-        aligned_w = int(np.ceil(width / stride) * stride)
-        return aligned_h, aligned_w
-
-    def _clamp_hw(self, height: int, width: int) -> tuple[int, int]:
-        """Clamp H/W to configured dynamic min/max sizes."""
-        if self.dynamic_min_size:
-            height = max(height, int(self.dynamic_min_size[0]))
-            width = max(width, int(self.dynamic_min_size[1]))
-        if self.dynamic_max_size:
-            height = min(height, int(self.dynamic_max_size[0]))
-            width = min(width, int(self.dynamic_max_size[1]))
-        return height, width
-
     def _prepare_batch_cpu(self, frames) -> tuple[List[PreprocessMeta], tuple[int, int, int, int]]:
         """Prepare CPU batch (letterbox or resize) and upload into TRT input buffer."""
         try:
             import cupy as cp
         except ImportError as exc:
             raise RuntimeError("CuPy is required for TensorRT preprocessing") from exc
-        target_hw = self._resolve_target_size(frames)
+        target_hw = self.input_size
         self._ensure_host_batch(len(frames), target_hw[0], target_hw[1])
         if self.no_letterbox:
             batch_imgs, metas = prepare_batch_no_letterbox(frames, target_hw, out=self._host_batch)
@@ -535,7 +488,7 @@ class TensorRTYoloEngine(InferenceEngine):
 
         batch = len(frames)
         self._ensure_gpu_buffers(batch)
-        target_hw = self._resolve_target_size(frames)
+        target_hw = self.input_size
         height, width = target_hw
         input_view = self.input.device[: batch * 3 * height * width].reshape((batch, 3, height, width))
         scale = 1.0 / 255.0

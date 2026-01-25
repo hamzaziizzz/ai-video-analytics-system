@@ -20,7 +20,7 @@ It focuses on person detection with optional cropped person data in the response
 ```python
 from ai_video_analytics_clients import AVASClient
 
-client = AVASClient(host="http://localhost", port=18081)
+client = AVASClient(host="http://localhost", port=18080)
 client.server_info()
 
 results = client.extract(
@@ -38,7 +38,7 @@ import asyncio
 from ai_video_analytics_clients import AVASClientAsync
 
 async def main():
-    client = AVASClientAsync(host="http://localhost", port=18081)
+    client = AVASClientAsync(host="http://localhost", port=18080)
     await client.start()
     try:
         results = await client.extract(
@@ -75,11 +75,12 @@ asyncio.run(main())
 
 ```python
 class PeopleResponse(BaseModel):
-    num_det: Optional[int]  # total detections in the image
+    num_det: Optional[int]  # 0-based index within the image
     prob: Optional[float]
     bbox: Optional[List[int]]
     class_id: Optional[int]
     class_name: Optional[str]
+    track_id: Optional[int]
     persondata: Optional[str]
 ```
 

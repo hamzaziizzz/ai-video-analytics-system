@@ -26,6 +26,8 @@ except Exception:  # pragma: no cover - optional dependency
     _HAS_CUPY = False
     cp = None  # type: ignore
 
+_CUPY_NMS_MIN_BOXES = 200
+
 
 class PreprocessMeta:
     """Per-image preproc metadata used to rescale detections back to original size."""
@@ -653,7 +655,8 @@ def decode_yolo_output(
             else:
                 kpts = rescale_keypoints(kpts, meta)
 
-        if use_cupy_nms and _HAS_CUPY:
+        use_gpu_nms = use_cupy_nms and _HAS_CUPY and boxes_xyxy.shape[0] >= _CUPY_NMS_MIN_BOXES
+        if use_gpu_nms:
             keep = _nms_cupy(boxes_xyxy, scores, nms_iou_threshold)
         elif _HAS_NUMBA and workspace.dets is not None:
             workspace.dets[:count, :4] = boxes_xyxy
@@ -750,7 +753,8 @@ def decode_yolo_output(
         else:
             kpts = rescale_keypoints(kpts, meta)
 
-    if use_cupy_nms and _HAS_CUPY:
+    use_gpu_nms = use_cupy_nms and _HAS_CUPY and boxes_xyxy.shape[0] >= _CUPY_NMS_MIN_BOXES
+    if use_gpu_nms:
         keep = _nms_cupy(boxes_xyxy, scores, nms_iou_threshold)
     elif _HAS_NUMBA:
         dets = np.concatenate([boxes_xyxy, scores[:, None]], axis=1)

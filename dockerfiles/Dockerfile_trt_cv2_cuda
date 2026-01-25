@@ -15,7 +15,6 @@ ARG CUDA_ARCH_BIN=8.9
 # - We install build deps to compile OpenCV with CUDA.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        # runtime deps you already had \
         libgl1-mesa-glx \
         protobuf-compiler \
         libprotoc-dev \
@@ -23,7 +22,6 @@ RUN apt-get update && \
         libturbojpeg \
         curl \
         ffmpeg \
-        # OpenCV build deps
         build-essential \
         cmake \
         git \
@@ -41,8 +39,7 @@ RUN apt-get update && \
     && rm -rf /var/lib/apt/lists/*
 
 # Ensure pip + numpy are available for OpenCV Python bindings
-RUN $PIP_INSTALL pip setuptools wheel && \
-    python -m pip --no-cache-dir install -U numpy
+RUN $PIP_INSTALL pip setuptools wheel ultralytics==8.4.0 numpy
 
 # ---- Remove any CPU OpenCV wheels that might get pulled in accidentally later ----
 RUN python -m pip uninstall -y \
@@ -98,10 +95,10 @@ RUN grep -qiE '^opencv-python|^opencv-contrib-python|^opencv-python-headless|^op
       (echo "ERROR: Remove opencv-python* from requirements.txt (CUDA OpenCV is built from source in the image)." && exit 1) \
     || true
 
-RUN $PIP_INSTALL -Ir requirements.txt
+RUN $PIP_INSTALL -r requirements.txt
 
 # GPU specific packages
-RUN $PIP_INSTALL cupy-cuda12x pynvjpeg
+RUN $PIP_INSTALL --no-build-isolation cupy-cuda12x pynvjpeg
 
 WORKDIR /app
 COPY ai_video_analytics /app/ai_video_analytics

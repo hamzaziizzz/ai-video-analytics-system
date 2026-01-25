@@ -9,6 +9,7 @@ class Detection:
     class_id: int
     class_name: str
     keypoints: Optional[List[List[float]]] = None
+    track_id: Optional[int] = None
 
 
 class InferenceEngine:

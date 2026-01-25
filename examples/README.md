@@ -31,7 +31,7 @@ python3 examples/process_dir_async.py
 Modify these variables at the bottom of the file:
 ```python
 host = 'http://localhost'  # Detection API host
-port = 18081               # Detection API port
+port = 18080               # Detection API port
 images_dir = 'misc/test_images'  # Directory with images to process
 ```
 

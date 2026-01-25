@@ -32,6 +32,7 @@ async def extract(
        - **threshold**: Detection threshold. Default: 0.6 (*optional*)
        - **return_person_data**: Return crops encoded in base64. Default: False (*optional*)
        - **limit_people**: Maximum number of detections to be processed.  0 for unlimited number. Default: 0 (*optional*)
+       - **reset_tracking**: Reset tracker state before processing this request. Default: False (*optional*)
        - **verbose_timings**: Return all timings. Default: False (*optional*)
        - **msgpack**: Serialize output to msgpack format for transfer. Default: False (*optional*)
        \f
@@ -49,6 +50,7 @@ async def extract(
             threshold=data.threshold,
             limit_people=data.limit_people,
             min_person_size=data.min_person_size,
+            reset_tracking=data.reset_tracking,
             verbose_timings=data.verbose_timings,
             b64_decode=b64_decode,
             img_req_headers=data.img_req_headers,
@@ -156,6 +158,7 @@ async def extract_upl(
     return_person_data: bool = Form(False),
     limit_people: int = Form(0),
     min_person_size: int = Form(0),
+    reset_tracking: bool = Form(False),
     verbose_timings: bool = Form(False),
     msgpack: bool = Form(False),
     accept: Optional[List[str]] = Header(None),
@@ -168,6 +171,7 @@ async def extract_upl(
        - **threshold**: Detection threshold. Default: 0.6 (*optional*)
        - **return_person_data**: Return crops encoded in base64. Default: False (*optional*)
        - **limit_people**: Maximum number of detections to be processed.  0 for unlimited number. Default: 0 (*optional*)
+       - **reset_tracking**: Reset tracker state before processing this request. Default: False (*optional*)
        - **verbose_timings**: Return all timings. Default: False (*optional*)
        - **msgpack**: Serialize output to msgpack format for transfer. Default: False (*optional*)
        \f
@@ -184,6 +188,7 @@ async def extract_upl(
             threshold=threshold,
             limit_people=limit_people,
             min_person_size=min_person_size,
+            reset_tracking=reset_tracking,
             verbose_timings=verbose_timings,
             b64_decode=False,
         )

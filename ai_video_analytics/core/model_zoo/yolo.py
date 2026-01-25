@@ -4,8 +4,6 @@ import shutil
 from pathlib import Path
 from typing import List, Optional
 
-from onnxsim import simplify
-
 from ..utils.logging import get_logger
 from ..utils.model_assets import download_file
 from ..utils.model_registry import get_registry
@@ -23,7 +21,7 @@ def prepare_yolo_inference_assets(config) -> None:
     model_ref = config.models.detection_model or config.inference.model_path
     model_path = Path(config.inference.model_path)
     is_pose = _is_pose_model(model_ref)
-    dynamic_export = bool(config.inference.trt_dynamic_shapes or config.inference.batch_size > 1)
+    dynamic_export = bool(config.inference.batch_size > 1)
     expected_suffix = _expected_suffix(engine)
     explicit_path = _is_explicit_path(model_ref)
     if engine == "openvino" and explicit_path:
@@ -48,24 +46,65 @@ def prepare_yolo_inference_assets(config) -> None:
         return
 
     if engine in {"onnx", "openvino", "tensorrt", "trt"}:
-        if model_path.exists() and model_path.suffix == ".pt":
-            pt_path = model_path
-        else:
-            pt_path = ensure_yolo_pt(model_ref, models_dir)
+        if engine == "onnx":
+            if model_path.exists() and model_path.suffix == ".onnx":
+                return
+            if model_path.exists() and model_path.suffix == ".pt":
+                pt_path = model_path
+            else:
+                pt_path = ensure_yolo_pt(model_ref, models_dir)
+            output_path = _resolve_output_path(
+                model_path,
+                pt_path,
+                ".onnx",
+                engine,
+                models_dir=models_dir,
+                gpu_id=None,
+                batch_size=config.inference.batch_size,
+                fp16=config.inference.fp16,
+                int8=config.inference.int8,
+                input_size=_resolve_export_size(config),
+                prefer_model_path=explicit_path,
+                extra_tags=None,
+            )
+            if output_path.exists():
+                config.inference.model_path = str(output_path)
+                return
+            exported_path = export_yolo(
+                pt_path,
+                output_path=output_path,
+                export_format="onnx",
+                device=config.inference.device,
+                fp16=config.inference.fp16,
+                int8=False,
+                imgsz=_resolve_export_size(config),
+                batch_size=config.inference.batch_size,
+                opset=17,
+                nms=not is_pose,
+                dynamic=dynamic_export,
+            )
+            config.inference.model_path = str(exported_path)
+            return
+
         if engine in {"tensorrt", "trt"} and config.inference.int8 and not config.inference.int8_calib_data:
             get_logger("models.export").warning(
                 "INT8 TensorRT build requested but INT8_CALIB_DATA is not set; disabling INT8."
             )
             config.inference.int8 = False
+
         export_format, suffix = _export_format(engine)
         gpu_id = _parse_gpu_id(config.inference.device)
         if gpu_id is None and engine in {"tensorrt", "trt"}:
             gpu_id = 0
+
+        if model_path.exists() and model_path.suffix == ".pt":
+            pt_path = model_path
+        else:
+            pt_path = ensure_yolo_pt(model_ref, models_dir)
+
         extra_tags = []
         if trt_impl in {"ultralytics", "ultra", "yolo"}:
             extra_tags.append("ultralytics")
-        if config.inference.trt_dynamic_shapes:
-            extra_tags.append("dyn")
         if not extra_tags:
             extra_tags = None
         output_path = _resolve_output_path(
@@ -94,6 +133,7 @@ def prepare_yolo_inference_assets(config) -> None:
             else:
                 config.inference.model_path = str(output_path)
                 return
+
         if engine in {"tensorrt", "trt"} and trt_impl in {"ultralytics", "ultra", "yolo"}:
             exported_path = export_yolo(
                 pt_path,
@@ -112,13 +152,11 @@ def prepare_yolo_inference_assets(config) -> None:
         elif output_path.exists():
             config.inference.model_path = str(output_path)
             return
+
         if engine in {"tensorrt", "trt"}:
             onnx_dir = models_dir / "onnx"
             onnx_dir.mkdir(parents=True, exist_ok=True)
-            onnx_name = pt_path.stem
-            if config.inference.trt_dynamic_shapes:
-                onnx_name = f"{onnx_name}_dyn"
-            onnx_path = onnx_dir / f"{onnx_name}.onnx"
+            onnx_path = onnx_dir / f"{pt_path.stem}.onnx"
             if not onnx_path.exists():
                 export_yolo(
                     pt_path,
@@ -141,10 +179,6 @@ def prepare_yolo_inference_assets(config) -> None:
                 fp16=config.inference.fp16,
                 max_batch_size=config.inference.batch_size,
                 input_size=config.inference.input_size,
-                dynamic_shapes=config.inference.trt_dynamic_shapes,
-                dynamic_min_size=config.inference.trt_dynamic_min_size,
-                dynamic_max_size=config.inference.trt_dynamic_max_size,
-                dynamic_stride=config.inference.trt_dynamic_stride,
                 int8=config.inference.int8,
                 gpu_id=gpu_id or 0,
                 calib_data=Path(config.inference.int8_calib_data) if config.inference.int8_calib_data else None,
@@ -257,11 +291,8 @@ def export_yolo(
 
 
 def _resolve_export_size(config) -> tuple[int, int]:
-    """Pick export size for dynamic TRT builds (max size to cover profile)."""
-    size = tuple(config.inference.input_size)
-    if config.inference.trt_dynamic_shapes and config.inference.trt_dynamic_max_size:
-        return tuple(config.inference.trt_dynamic_max_size)
-    return size
+    """Pick export size for model export."""
+    return tuple(config.inference.input_size)
 
 
 def _relocate_onnx_artifact(model_path: Path, engine_path: Path) -> None:

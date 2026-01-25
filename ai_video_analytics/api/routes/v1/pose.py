@@ -11,7 +11,7 @@ from starlette.responses import PlainTextResponse, StreamingResponse
 from ai_video_analytics.api.routes.v1.msgpack import MsgpackRoute
 from ai_video_analytics.api.routes.v1.image_utils import tile_images
 from ai_video_analytics.core.processing import ProcessingDep
-from ai_video_analytics.schemas import Images, PoseExtract
+from ai_video_analytics.schemas import Images, PoseDraw, PoseExtract
 
 
 router = APIRouter(route_class=MsgpackRoute)
@@ -31,6 +31,7 @@ async def extract_pose(
        - **images**: dict containing either links or data lists. (*required*)
        - **threshold**: Detection threshold. Default: 0.6 (*optional*)
        - **limit_people**: Maximum number of detections to be processed.  0 for unlimited number. Default: 0 (*optional*)
+       - **reset_tracking**: Reset tracker state before processing this request. Default: False (*optional*)
        - **verbose_timings**: Return all timings. Default: False (*optional*)
        - **msgpack**: Serialize output to msgpack format for transfer. Default: False (*optional*)
        \f
@@ -47,6 +48,7 @@ async def extract_pose(
             threshold=data.threshold,
             limit_people=data.limit_people,
             min_person_size=data.min_person_size,
+            reset_tracking=data.reset_tracking,
             verbose_timings=data.verbose_timings,
             b64_decode=b64_decode,
             img_req_headers=data.img_req_headers,
@@ -58,6 +60,33 @@ async def extract_pose(
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+@router.post("/pose/draw", tags=["Pose"])
+async def draw_pose(data: PoseDraw, processing: ProcessingDep):
+    """
+    Return image with drawn poses for testing purposes.
+
+       - **images**: dict containing either links or data lists. (*required*)
+       - **threshold**: Detection threshold. Default: 0.6 (*optional*)
+       - **draw_scores**: Draw detection scores Default: True (*optional*)
+       - **draw_sizes**: Draw detection sizes Default: True (*optional*)
+       - **limit_people**: Maximum number of detections to be processed.  0 for unlimited number. Default: 0 (*optional*)
+       \f
+    """
+    try:
+        output = await processing.draw_pose(
+            data.images,
+            threshold=data.threshold,
+            draw_scores=data.draw_scores,
+            draw_sizes=data.draw_sizes,
+            limit_people=data.limit_people,
+            min_person_size=data.min_person_size,
+        )
+        output.seek(0)
+        return StreamingResponse(output, media_type="image/png")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 @router.post("/multipart/pose/detect", tags=["Pose"])
 async def extract_pose_upl(
     processing: ProcessingDep,
@@ -65,6 +94,7 @@ async def extract_pose_upl(
     threshold: float = Form(0.6),
     limit_people: int = Form(0),
     min_person_size: int = Form(0),
+    reset_tracking: bool = Form(False),
     verbose_timings: bool = Form(False),
     msgpack: bool = Form(False),
     accept: Optional[List[str]] = Header(None),
@@ -76,6 +106,7 @@ async def extract_pose_upl(
        - **files**: Image file(s) (*required*)
        - **threshold**: Detection threshold. Default: 0.6 (*optional*)
        - **limit_people**: Maximum number of detections to be processed.  0 for unlimited number. Default: 0 (*optional*)
+       - **reset_tracking**: Reset tracker state before processing this request. Default: False (*optional*)
        - **verbose_timings**: Return all timings. Default: False (*optional*)
        - **msgpack**: Serialize output to msgpack format for transfer. Default: False (*optional*)
        \f
@@ -91,6 +122,7 @@ async def extract_pose_upl(
             threshold=threshold,
             limit_people=limit_people,
             min_person_size=min_person_size,
+            reset_tracking=reset_tracking,
             verbose_timings=verbose_timings,
             b64_decode=False,
         )

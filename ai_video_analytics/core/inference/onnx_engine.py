@@ -42,6 +42,9 @@ class OnnxYoloEngine(InferenceEngine):
         debug_log_raw_interval_seconds: float,
         debug_log_raw_rows: int,
         debug_log_raw_cols: int,
+        use_cupy_nms: bool,
+        use_numba_decode: bool,
+        use_gpu_preproc: bool,
         return_keypoints: bool = False,
     ):
         self.model_path = model_path
@@ -67,7 +70,9 @@ class OnnxYoloEngine(InferenceEngine):
         self._last_raw_log_ts = 0.0
         self.logger = get_logger("inference.onnx")
         self.output_layout = ""
-        self.use_cupy_nms = False
+        self.use_cupy_nms = bool(use_cupy_nms)
+        self.use_numba_decode = bool(use_numba_decode)
+        self._use_gpu_preproc_flag = bool(use_gpu_preproc)
         self._device_id = 0
         self._has_cuda_provider = False
         self._use_io_binding = False
@@ -88,9 +93,11 @@ class OnnxYoloEngine(InferenceEngine):
         session_options.log_severity_level = self.log_severity_level
         provider_specs = self._resolve_provider_specs(providers, self._device_id)
         self.session = ort.InferenceSession(self.model_path, sess_options=session_options, providers=provider_specs)
-        self.use_cupy_nms = self._has_cuda_provider and _HAS_CUPY
+        self.use_cupy_nms = self._has_cuda_provider and _HAS_CUPY and self.use_cupy_nms
         self._use_io_binding = self._has_cuda_provider and _HAS_CUPY
-        self._use_gpu_preproc = self._has_cuda_provider and _HAS_CUPY and _HAS_CUPYX
+        self._use_gpu_preproc = (
+            self._has_cuda_provider and _HAS_CUPY and _HAS_CUPYX and self._use_gpu_preproc_flag
+        )
         self.input_name = self.session.get_inputs()[0].name
         self.input_dtype = self._resolve_input_dtype(self.session.get_inputs()[0].type)
         self._output_names = [output.name for output in self.session.get_outputs()]
@@ -350,6 +357,7 @@ class OnnxYoloEngine(InferenceEngine):
                         output_layout=self.output_layout,
                         class_id_filter=self.class_id_filter,
                         use_cupy_nms=self.use_cupy_nms,
+                        use_numba_decode=self.use_numba_decode,
                         return_keypoints=self.return_keypoints,
                     )
                 )
@@ -362,15 +370,16 @@ class OnnxYoloEngine(InferenceEngine):
                     labels=self.labels,
                     confidence_threshold=self.confidence_threshold,
                     nms_iou_threshold=self.nms_iou_threshold,
-                    has_objectness=self.has_objectness,
-                    meta=meta,
-                    end_to_end=self.end_to_end,
-                    output_layout=self.output_layout,
-                    class_id_filter=self.class_id_filter,
-                    use_cupy_nms=self.use_cupy_nms,
-                    return_keypoints=self.return_keypoints,
-                )
+                has_objectness=self.has_objectness,
+                meta=meta,
+                end_to_end=self.end_to_end,
+                output_layout=self.output_layout,
+                class_id_filter=self.class_id_filter,
+                use_cupy_nms=self.use_cupy_nms,
+                use_numba_decode=self.use_numba_decode,
+                return_keypoints=self.return_keypoints,
             )
+        )
         return detections_batch
 
     def _maybe_log_raw_output(self, output: np.ndarray) -> None:

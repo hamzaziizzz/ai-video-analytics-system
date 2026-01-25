@@ -76,3 +76,13 @@ All configs related to detection, num workers, etc., are located in `.env` file.
 As starting point it's recommended to adjust `NUM_WORKERS` parameter to value which fits to your GPU
 model without causing CUDA Out of Memory errors (on modern GPUs usually about 4-6 workers can fit in memory and achieve
 maximum performance, larger number of workers usually gives no performance boost)
+
+## Webcam access (tracking streams)
+
+To allow `/tracking/stream` to access host webcams, set:
+
+```
+GRANT_WEBCAM_ACCESS=True
+```
+
+This enables privileged mode for the container so it can access `/dev/video*`.

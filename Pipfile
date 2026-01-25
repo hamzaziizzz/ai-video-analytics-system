@@ -1,9 +1,26 @@
 [[source]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+verify_ssl = true
+
+[[source]]
+name = "pypi"
 url = "https://pypi.org/simple"
-verify_ssl = false
-name = "pip_conf_index_global"
+verify_ssl = true
+
+[[source]]
+name = "nvidia-ngc"
+url = "https://pypi.ngc.nvidia.com"
+verify_ssl = true
+
 
 [packages]
+# ---- PyTorch CUDA 12.6 ----
+torch = {version = "==2.9.1", index = "pytorch-cu126"}
+torchvision = {version = "==0.24.1", index = "pytorch-cu126"}
+torchaudio = {version = "==2.9.1", index = "pytorch-cu126"}
+
+# ---- Web/API ----
 fastapi = "*"
 fastapi-offline = "*"
 uvicorn = "*"
@@ -14,25 +31,34 @@ httpx = "*"
 python-multipart = "*"
 ujson = "*"
 msgpack = "*"
-tqdm = "*"
-icc-rt = "*"
-numpy = "<2"
+aiohttp = "*"
+tenacity = "*"
+colorlog = "*"
+
+# ---- Core numeric / vision ----
+numpy = "*"
 numba = "*"
 scikit-image = "*"
+imageio = "*"
+exifread = "*"
+tqdm = "*"
+
+# ---- ONNX / Inference ----
 onnx = "<2.0.0,>=1.12.0"
 onnxslim = ">=0.1.71"
 onnxruntime-gpu = "*"
 onnx-simplifier = "*"
-ultralytics = "*"
-torch = "*"
-torchvision = "*"
-exifread = "*"
-imageio = "*"
-tenacity = "*"
-colorlog = "*"
-pyturbojpeg = {git = "https://github.com/lilohuang/PyTurboJPEG.git"}
 tritonclient = {extras = ["grpc", "http"], version = "*"}
-aiohttp = "*"
+
+# ---- DL / CV ----
+ultralytics = "*"
+tensorboard = "*"
+gdown = "*"
+pyturbojpeg = {git = "https://github.com/lilohuang/PyTurboJPEG.git"}
+
+# ---- Misc ----
+icc-rt = "*"
+
 
 [dev-packages]
 pytest = "*"

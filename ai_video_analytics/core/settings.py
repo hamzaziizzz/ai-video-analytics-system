@@ -24,6 +24,13 @@ class Settings(BaseSettings):
     segmentation_model: Optional[str] = None
     obb_model: Optional[str] = None
     tracking: Optional[bool] = None
+    tracker_type: Optional[str] = None
+    tracker_numba: Optional[bool] = None
+    tracker_reid_model: Optional[str] = None
+    tracker_reid_batch_size: Optional[int] = None
+    tracker_reid_device: Optional[str] = None
+    tracker_matching: Optional[str] = None
+    pose_batch_size: Optional[int] = None
     fall_detection: Optional[bool] = None
     count: Optional[bool] = None
     inference_backend: Optional[str] = None
@@ -31,10 +38,9 @@ class Settings(BaseSettings):
     trt_gpu_preproc: Optional[bool] = None
     trt_ultralytics_nms: Optional[bool] = None
     trt_numba_decode: Optional[bool] = None
-    trt_dynamic_shapes: Optional[bool] = None
-    trt_dynamic_min_size: Optional[str] = None
-    trt_dynamic_max_size: Optional[str] = None
-    trt_dynamic_stride: Optional[int] = None
+    gpu_preproc: Optional[bool] = None
+    gpu_postproc: Optional[bool] = None
+    numba_decode: Optional[bool] = None
     trt_no_letterbox: Optional[bool] = None
     trt_gpu_timing: Optional[bool] = None
     num_workers: Optional[int] = None
@@ -73,8 +79,6 @@ class Settings(BaseSettings):
     min_fps_per_stream: Optional[float] = None
     fps_adjust_interval_seconds: Optional[float] = None
     fps_headroom: Optional[float] = None
-    warmup_iters: Optional[int] = None
-    warmup_batch_size: Optional[int] = None
 
     class Config:
         env_prefix = "AVAS_"
@@ -116,10 +120,6 @@ def build_default_config(settings: Settings) -> AppConfig:
         trt_gpu_preproc=False,
         trt_ultralytics_nms=False,
         trt_numba_decode=True,
-        trt_dynamic_shapes=False,
-        trt_dynamic_min_size=None,
-        trt_dynamic_max_size=None,
-        trt_dynamic_stride=32,
         trt_no_letterbox=False,
         trt_gpu_timing=True,
         algorithm="YOLO",
@@ -146,7 +146,18 @@ def build_default_config(settings: Settings) -> AppConfig:
     alerts = AlertConfig()
     database = DatabaseConfig()
     streaming = StreamingConfig(enabled=True, draw_boxes=True, draw_all_detections=False, jpeg_quality=80, fps_limit=30.0)
-    features = FeatureConfig(tracking=False, fall_detection=False, counting=True)
+    features = FeatureConfig(
+        tracking=False,
+        tracker_type="bytetrack",
+        tracker_numba=True,
+        tracker_reid_model=None,
+        tracker_reid_batch_size=32,
+        tracker_reid_device=None,
+        tracker_matching="greedy",
+        pose_batch_size=None,
+        fall_detection=False,
+        counting=True,
+    )
     models = ModelConfig(
         algorithm=settings.algorithm or "YOLO",
         detection_model=settings.detection_model or "yolo26x",
@@ -250,12 +261,6 @@ def apply_settings_overrides(config: AppConfig, settings: Settings) -> None:
     fps_headroom = _env_float(settings.fps_headroom, "FPS_HEADROOM")
     if fps_headroom is not None:
         config.inference.fps_headroom = fps_headroom
-    warmup_iters = _env_int(settings.warmup_iters, "WARMUP_ITERS")
-    if warmup_iters is not None:
-        config.inference.warmup_iters = max(0, warmup_iters)
-    warmup_batch_size = _env_int(settings.warmup_batch_size, "WARMUP_BATCH_SIZE")
-    if warmup_batch_size is not None:
-        config.inference.warmup_batch_size = max(1, warmup_batch_size)
     fp16 = _env_bool(settings.fp16, "FP16")
     if fp16 is None:
         fp16 = _env_bool(None, "FORCE_FP16")
@@ -276,36 +281,32 @@ def apply_settings_overrides(config: AppConfig, settings: Settings) -> None:
     use_nvjpeg = _env_bool(settings.use_nvjpeg, "USE_NVJPEG")
     if use_nvjpeg is not None:
         config.inference.use_nvjpeg = use_nvjpeg
-    use_cupy_nms = _env_bool(settings.use_cupy_nms, "USE_CUPY_NMS")
+    use_cupy_nms = _env_bool(settings.gpu_postproc, "GPU_POSTPROC")
+    if use_cupy_nms is None:
+        use_cupy_nms = _env_bool(None, "USE_GPU_POSTPROC")
+    if use_cupy_nms is None:
+        use_cupy_nms = _env_bool(settings.use_cupy_nms, "USE_CUPY_NMS")
+    if use_cupy_nms is None:
+        use_cupy_nms = _env_bool(None, "CUPY_NMS")
     if use_cupy_nms is not None:
         config.inference.use_cupy_nms = use_cupy_nms
-    trt_gpu_preproc = _env_bool(settings.trt_gpu_preproc, "TRT_GPU_PREPROC")
+    trt_gpu_preproc = _env_bool(settings.gpu_preproc, "GPU_PREPROC")
+    if trt_gpu_preproc is None:
+        trt_gpu_preproc = _env_bool(None, "USE_GPU_PREPROC")
+    if trt_gpu_preproc is None:
+        trt_gpu_preproc = _env_bool(settings.trt_gpu_preproc, "TRT_GPU_PREPROC")
     if trt_gpu_preproc is not None:
         config.inference.trt_gpu_preproc = trt_gpu_preproc
     trt_ultralytics_nms = _env_bool(settings.trt_ultralytics_nms, "TRT_ULTRALYTICS_NMS")
     if trt_ultralytics_nms is not None:
         config.inference.trt_ultralytics_nms = trt_ultralytics_nms
-    trt_numba_decode = _env_bool(settings.trt_numba_decode, "TRT_NUMBA_DECODE")
+    trt_numba_decode = _env_bool(settings.numba_decode, "NUMBA_DECODE")
+    if trt_numba_decode is None:
+        trt_numba_decode = _env_bool(None, "USE_NUMBA_DECODE")
+    if trt_numba_decode is None:
+        trt_numba_decode = _env_bool(settings.trt_numba_decode, "TRT_NUMBA_DECODE")
     if trt_numba_decode is not None:
         config.inference.trt_numba_decode = trt_numba_decode
-    trt_dynamic_shapes = _env_bool(settings.trt_dynamic_shapes, "TRT_DYNAMIC_SHAPES")
-    if trt_dynamic_shapes is not None:
-        config.inference.trt_dynamic_shapes = trt_dynamic_shapes
-    trt_dynamic_min = _env_str(settings.trt_dynamic_min_size, "TRT_DYNAMIC_MIN_SIZE")
-    if trt_dynamic_min:
-        parsed = _parse_size_list(trt_dynamic_min)
-        if parsed:
-            width, height = parsed
-            config.inference.trt_dynamic_min_size = (height, width)
-    trt_dynamic_max = _env_str(settings.trt_dynamic_max_size, "TRT_DYNAMIC_MAX_SIZE")
-    if trt_dynamic_max:
-        parsed = _parse_size_list(trt_dynamic_max)
-        if parsed:
-            width, height = parsed
-            config.inference.trt_dynamic_max_size = (height, width)
-    trt_dynamic_stride = _env_int(settings.trt_dynamic_stride, "TRT_DYNAMIC_STRIDE")
-    if trt_dynamic_stride is not None and trt_dynamic_stride > 0:
-        config.inference.trt_dynamic_stride = trt_dynamic_stride
     trt_no_letterbox = _env_bool(settings.trt_no_letterbox, "TRT_NO_LETTERBOX")
     if trt_no_letterbox is not None:
         config.inference.trt_no_letterbox = trt_no_letterbox
@@ -314,8 +315,6 @@ def apply_settings_overrides(config: AppConfig, settings: Settings) -> None:
         config.inference.trt_gpu_timing = trt_gpu_timing
     if config.inference.int8:
         config.inference.fp16 = False
-
-    _apply_trt_dynamic_defaults(config)
 
     algorithm = _env_str(settings.algorithm, "ALGORITHM")
     if algorithm:
@@ -339,6 +338,34 @@ def apply_settings_overrides(config: AppConfig, settings: Settings) -> None:
     tracking = _env_bool(settings.tracking, "TRACKING")
     if tracking is not None:
         config.features.tracking = tracking
+    enable_tracking = _env_bool(None, "ENABLE_TRACKING")
+    if enable_tracking is not None:
+        config.features.tracking = enable_tracking
+    tracker_type = _env_str(settings.tracker_type, "TRACKER_TYPE")
+    if tracker_type:
+        config.features.tracker_type = tracker_type.strip().lower()
+    tracker_numba = _env_bool(settings.tracker_numba, "TRACKER_NUMBA")
+    if tracker_numba is None:
+        tracker_numba = _env_bool(settings.numba_decode, "NUMBA_DECODE")
+    if tracker_numba is None:
+        tracker_numba = _env_bool(None, "USE_NUMBA_DECODE")
+    if tracker_numba is not None:
+        config.features.tracker_numba = tracker_numba
+    tracker_reid_model = _env_str(settings.tracker_reid_model, "TRACKER_REID_MODEL")
+    if tracker_reid_model:
+        config.features.tracker_reid_model = tracker_reid_model
+    tracker_reid_batch_size = _env_int(settings.tracker_reid_batch_size, "TRACKER_REID_BATCH_SIZE")
+    if tracker_reid_batch_size is not None:
+        config.features.tracker_reid_batch_size = max(1, tracker_reid_batch_size)
+    tracker_reid_device = _env_str(settings.tracker_reid_device, "TRACKER_REID_DEVICE")
+    if tracker_reid_device:
+        config.features.tracker_reid_device = tracker_reid_device
+    tracker_matching = _env_str(settings.tracker_matching, "TRACKER_MATCHING")
+    if tracker_matching:
+        config.features.tracker_matching = tracker_matching.strip().lower()
+    pose_batch_size = _env_int(settings.pose_batch_size, "POSE_BATCH_SIZE")
+    if pose_batch_size is not None:
+        config.features.pose_batch_size = max(1, pose_batch_size)
     fall_detection = _env_bool(settings.fall_detection, "FALL_DETECTION")
     if fall_detection is not None:
         config.features.fall_detection = fall_detection
@@ -556,41 +583,6 @@ def _camera_defaults(settings: Settings) -> Tuple[float, int, float, float]:
         max_backoff = 30.0
     return fps_limit, queue_size, min_backoff, max_backoff
 
-
-def _apply_trt_dynamic_defaults(config: AppConfig) -> None:
-    """Fill TRT dynamic shape defaults based on input_size to keep config simple.
-
-    Defaults are conservative (min=480, max=960 for 640 input) and aligned to stride.
-    """
-    inference = config.inference
-    if not inference.trt_dynamic_shapes:
-        return
-
-    stride = inference.trt_dynamic_stride or 32
-    stride = max(1, int(stride))
-    input_h, input_w = inference.input_size
-
-    def align_down(value: int) -> int:
-        if stride <= 1:
-            return value
-        return max(stride, (value // stride) * stride)
-
-    def align_up(value: int) -> int:
-        if stride <= 1:
-            return value
-        return int(((value + stride - 1) // stride) * stride)
-
-    if inference.trt_dynamic_min_size is None:
-        # Default min is half of opt size, aligned to stride.
-        min_h = align_down(max(stride, int(input_h * 0.5)))
-        min_w = align_down(max(stride, int(input_w * 0.5)))
-        inference.trt_dynamic_min_size = (min_h, min_w)
-    if inference.trt_dynamic_max_size is None:
-        # Default max is double the opt size, aligned to stride.
-        max_h = align_up(int(input_h * 2))
-        max_w = align_up(int(input_w * 2))
-        inference.trt_dynamic_max_size = (max_h, max_w)
-    inference.trt_dynamic_stride = stride
 
 def _load_camera_config(path: Path, defaults: Tuple[float, int, float, float]) -> Optional[Tuple[List[Dict], Dict[str, List[List[float]]]]]:
     if not path.exists():

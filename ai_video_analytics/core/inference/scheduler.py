@@ -35,8 +35,6 @@ class InferenceScheduler:
         max_batch_wait_ms: float,
         request_timeout_seconds: float,
         input_size: Optional[tuple[int, int]] = None,
-        warmup_iters: int = 0,
-        warmup_batch_size: int = 1,
     ) -> None:
         self.engine_factory = engine_factory
         self.num_workers = max(1, num_workers)
@@ -45,8 +43,6 @@ class InferenceScheduler:
         self.max_batch_wait_ms = max(0.0, max_batch_wait_ms)
         self.request_timeout_seconds = max(0.1, request_timeout_seconds)
         self.input_size = input_size
-        self.warmup_iters = max(0, warmup_iters)
-        self.warmup_batch_size = max(1, warmup_batch_size)
         self._queue: queue.Queue = queue.Queue(maxsize=self.queue_size)
         self._stop_event = threading.Event()
         self._threads: List[threading.Thread] = []
@@ -161,17 +157,14 @@ class InferenceScheduler:
         except Exception as exc:
             self.logger.error("Failed to load inference engine (worker=%d): %s", worker_id, exc)
             return
-        if self.input_size and self.warmup_iters > 0:
+        if self.input_size:
             from .warmup import warmup_engine
 
-            warmup_batch = min(self.warmup_batch_size, self.batch_size)
-            max_batch = getattr(engine, "max_batch_size", warmup_batch)
-            warmup_batch = min(warmup_batch, max_batch)
+            warmup_batch = min(self.batch_size, getattr(engine, "max_batch_size", self.batch_size))
             warmup_engine(
                 engine,
                 self.input_size,
                 warmup_batch,
-                self.warmup_iters,
                 logger_name=f"inference.warmup.worker{worker_id}",
             )
 

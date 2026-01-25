@@ -4,7 +4,7 @@ services:
     image: ai-video-analytics:${AVAS_VERSION}
     build:
       context: ../
-      dockerfile: dockerfiles/Dockerfile_trt
+      dockerfile: dockerfiles/Dockerfile_trt_cv2_cuda
     hostname: avas
     env_file:
       - .env
@@ -18,6 +18,7 @@ services:
       - ../misc/test_images:/images/test_images
     ports:
       - "18080:18080"
+    privileged: ${GRANT_WEBCAM_ACCESS:-False}
     deploy:
       resources:
         reservations:

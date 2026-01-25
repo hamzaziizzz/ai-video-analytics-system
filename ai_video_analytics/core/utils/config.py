@@ -33,10 +33,6 @@ class InferenceConfig:
     trt_gpu_preproc: bool = False
     trt_ultralytics_nms: bool = False
     trt_numba_decode: bool = True
-    trt_dynamic_shapes: bool = False
-    trt_dynamic_min_size: Optional[Tuple[int, int]] = None
-    trt_dynamic_max_size: Optional[Tuple[int, int]] = None
-    trt_dynamic_stride: int = 32
     trt_no_letterbox: bool = False
     trt_gpu_timing: bool = True
     algorithm: str = "YOLO"
@@ -73,8 +69,6 @@ class InferenceConfig:
     min_fps_per_stream: float = 15.0
     fps_adjust_interval_seconds: float = 2.0
     fps_headroom: float = 0.9
-    warmup_iters: int = 1
-    warmup_batch_size: int = 1
 
 
 @dataclass
@@ -121,6 +115,13 @@ class StreamingConfig:
 @dataclass
 class FeatureConfig:
     tracking: bool = False
+    tracker_type: str = "bytetrack"
+    tracker_numba: bool = True
+    tracker_reid_model: Optional[str] = None
+    tracker_reid_batch_size: int = 32
+    tracker_reid_device: Optional[str] = None
+    tracker_matching: str = "greedy"
+    pose_batch_size: Optional[int] = None
     fall_detection: bool = False
     counting: bool = True
 
@@ -226,17 +227,6 @@ def load_config(path: str) -> AppConfig:
     inference_raw = data.get("inference")
     if not inference_raw:
         raise ValueError("Config must include inference settings")
-    min_size_raw = inference_raw.get("trt_dynamic_min_size")
-    if isinstance(min_size_raw, (list, tuple)) and len(min_size_raw) == 2:
-        trt_dynamic_min_size = (int(min_size_raw[0]), int(min_size_raw[1]))
-    else:
-        trt_dynamic_min_size = None
-    max_size_raw = inference_raw.get("trt_dynamic_max_size")
-    if isinstance(max_size_raw, (list, tuple)) and len(max_size_raw) == 2:
-        trt_dynamic_max_size = (int(max_size_raw[0]), int(max_size_raw[1]))
-    else:
-        trt_dynamic_max_size = None
-
     inference = InferenceConfig(
         engine=inference_raw["engine"],
         model_path=inference_raw["model_path"],
@@ -245,10 +235,6 @@ def load_config(path: str) -> AppConfig:
         trt_gpu_preproc=bool(inference_raw.get("trt_gpu_preproc", False)),
         trt_ultralytics_nms=bool(inference_raw.get("trt_ultralytics_nms", False)),
         trt_numba_decode=bool(inference_raw.get("trt_numba_decode", True)),
-        trt_dynamic_shapes=bool(inference_raw.get("trt_dynamic_shapes", False)),
-        trt_dynamic_min_size=trt_dynamic_min_size,
-        trt_dynamic_max_size=trt_dynamic_max_size,
-        trt_dynamic_stride=int(inference_raw.get("trt_dynamic_stride", 32)),
         trt_no_letterbox=bool(inference_raw.get("trt_no_letterbox", False)),
         trt_gpu_timing=bool(inference_raw.get("trt_gpu_timing", True)),
         algorithm=inference_raw.get("algorithm", "YOLO"),
@@ -331,6 +317,12 @@ def load_config(path: str) -> AppConfig:
     features_raw = data.get("features", {})
     features = FeatureConfig(
         tracking=bool(features_raw.get("tracking", False)),
+        tracker_type=str(features_raw.get("tracker_type", "bytetrack")),
+        tracker_numba=bool(features_raw.get("tracker_numba", True)),
+        tracker_reid_model=features_raw.get("tracker_reid_model"),
+        tracker_reid_batch_size=int(features_raw.get("tracker_reid_batch_size", 32)),
+        tracker_reid_device=features_raw.get("tracker_reid_device"),
+        tracker_matching=str(features_raw.get("tracker_matching", "greedy")),
         fall_detection=bool(features_raw.get("fall_detection", False)),
         counting=bool(features_raw.get("counting", True)),
     )

@@ -1,7 +1,7 @@
 {
     "_meta": {
         "hash": {
-            "sha256": "b584d82d8d85475d397b2b99e1ad0a7ae6d93e06068b2dd8089b4db3f63d5ee5"
+            "sha256": "b969ff1016521fd14e52882040a274692759e1ba62d5f58cd7e4dc431264e6d2"
         },
         "pipfile-spec": 6,
         "requires": {
@@ -17,6 +17,14 @@
         ]
     },
     "default": {
+        "absl-py": {
+            "hashes": [
+                "sha256:a97820526f7fbfd2ec1bce83f3f25e3a14840dac0d8e02a0b71cd75db3f77fc9",
+                "sha256:eeecf07f0c2a93ace0772c92e596ace6d3d3996c042b2128459aaae2a76de11d"
+            ],
+            "markers": "python_version >= '3.8'",
+            "version": "==2.3.1"
+        },
         "aiofiles": {
             "hashes": [
                 "sha256:a8d728f0a29de45dc521f18f07297428d56992a742f0cd2701ba86e44d23d5b2",
@@ -208,6 +216,14 @@
             ],
             "markers": "python_version >= '3.9'",
             "version": "==25.4.0"
+        },
+        "beautifulsoup4": {
+            "hashes": [
+                "sha256:0918bfe44902e6ad8d57732ba310582e98da931428d231a5ecb9e7c703a735bb",
+                "sha256:6292b1c5186d356bba669ef9f7f051757099565ad9ada5dd630bd9de5fa7fb86"
+            ],
+            "markers": "python_full_version >= '3.7.0'",
+            "version": "==4.14.3"
         },
         "brotli": {
             "hashes": [
@@ -794,6 +810,15 @@
             "markers": "python_version >= '3.10'",
             "version": "==2026.1.0"
         },
+        "gdown": {
+            "hashes": [
+                "sha256:247c2ad1f579db5b66b54c04e6a871995fc8fd7021708b950b8ba7b32cf90323",
+                "sha256:391f0480d495fb87644d1a1ee3ddfeb2144e1de31408fbc74f7e3b3ba927052b"
+            ],
+            "index": "pip_conf_index_global",
+            "markers": "python_version >= '3.8'",
+            "version": "==5.2.1"
+        },
         "gevent": {
             "hashes": [
                 "sha256:012a44b0121f3d7c800740ff80351c897e85e76a7e4764690f35c5ad9ec17de5",
@@ -1263,6 +1288,14 @@
             ],
             "markers": "python_version >= '3.10'",
             "version": "==0.46.0"
+        },
+        "markdown": {
+            "hashes": [
+                "sha256:1c19c10bd5c14ac948c53d0d762a04e2fa35a6d58a6b7b1e6bfcbe6fefc0001a",
+                "sha256:867d788939fe33e4b736426f5b9f651ad0c0ae0ecf89df0ca5d1176c70812fe3"
+            ],
+            "markers": "python_version >= '3.10'",
+            "version": "==3.10.1"
         },
         "markdown-it-py": {
             "hashes": [
@@ -2462,6 +2495,15 @@
             "markers": "python_version >= '3.9'",
             "version": "==3.3.2"
         },
+        "pysocks": {
+            "hashes": [
+                "sha256:08e69f092cc6dbe92a0fdd16eeb9b9ffbc13cadfe5ca4c7bd92ffb078b293299",
+                "sha256:2725bd0a9925919b9b51739eea5f9e2bae91e83288108a9ad338b2e3a4435ee5",
+                "sha256:3f8804571ebe159c380ac6de37643bb4685970655d3bba243530d6558b799aa0"
+            ],
+            "markers": "python_version >= '2.7' and python_version not in '3.0, 3.1, 3.2, 3.3'",
+            "version": "==1.7.1"
+        },
         "python-dateutil": {
             "hashes": [
                 "sha256:37dd54208da7e1cd875388217d5e00ebd4179249f90fb72437e91a35459a0ad3",
@@ -2640,6 +2682,9 @@
             "version": "==6.0.3"
         },
         "requests": {
+            "extras": [
+                "socks"
+            ],
             "hashes": [
                 "sha256:2462f94637a34fd532264295e186976db0f5d453d1cdd31473c85a6a161affb6",
                 "sha256:dbba0bac56e100853db0ea71b82b4dfd5fe2bf6d3754a8893c3af500cec7d7cf"
@@ -2737,6 +2782,14 @@
             "markers": "python_version >= '3.10'",
             "version": "==1.15.3"
         },
+        "setuptools": {
+            "hashes": [
+                "sha256:bf2e513eb8144c3298a3bd28ab1a5edb739131ec5c22e045ff93cd7f5319703a",
+                "sha256:fc30c51cbcb8199a219c12cc9c281b5925a4978d212f84229c909636d9f6984e"
+            ],
+            "markers": "python_version >= '3.9'",
+            "version": "==80.10.1"
+        },
         "six": {
             "hashes": [
                 "sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274",
@@ -2744,6 +2797,14 @@
             ],
             "markers": "python_version >= '2.7' and python_version not in '3.0, 3.1, 3.2'",
             "version": "==1.17.0"
+        },
+        "soupsieve": {
+            "hashes": [
+                "sha256:3267f1eeea4251fb42728b6dfb746edc9acaffc4a45b27e19450b676586e8349",
+                "sha256:ed64f2ba4eebeab06cc4962affce381647455978ffc1e36bb79a545b91f45a95"
+            ],
+            "markers": "python_version >= '3.9'",
+            "version": "==2.8.3"
         },
         "starlette": {
             "hashes": [
@@ -2769,6 +2830,23 @@
             "index": "pip_conf_index_global",
             "markers": "python_version >= '3.9'",
             "version": "==9.1.2"
+        },
+        "tensorboard": {
+            "hashes": [
+                "sha256:9dc9f978cb84c0723acf9a345d96c184f0293d18f166bb8d59ee098e6cfaaba6"
+            ],
+            "index": "pip_conf_index_global",
+            "markers": "python_version >= '3.9'",
+            "version": "==2.20.0"
+        },
+        "tensorboard-data-server": {
+            "hashes": [
+                "sha256:7e0610d205889588983836ec05dc098e80f97b7e7bbff7e994ebb78f578d0ddb",
+                "sha256:9fe5d24221b29625dbc7328b0436ca7fc1c23de4acf4d272f1180856e32f9f60",
+                "sha256:ef687163c24185ae9754ed5650eb5bc4d84ff257aabdc33f0cc6f74d8ba54530"
+            ],
+            "markers": "python_version >= '3.7'",
+            "version": "==0.7.2"
         },
         "tifffile": {
             "hashes": [
@@ -3029,6 +3107,14 @@
             "index": "pip_conf_index_global",
             "markers": "python_version >= '3.10'",
             "version": "==0.40.0"
+        },
+        "werkzeug": {
+            "hashes": [
+                "sha256:5111e36e91086ece91f93268bb39b4a35c1e6f1feac762c9c822ded0a4e322dc",
+                "sha256:6a548b0e88955dd07ccb25539d7d0cc97417ee9e179677d22c7041c8f078ce67"
+            ],
+            "markers": "python_version >= '3.9'",
+            "version": "==3.1.5"
         },
         "yarl": {
             "hashes": [
