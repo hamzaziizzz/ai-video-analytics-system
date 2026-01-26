@@ -55,8 +55,15 @@ track history (list of points). Tracking streams draw trail overlays.
 
 ## Example Outputs
 
-<video src="examples/videos/inferred-video-1.mp4" controls width="640"></video>
-<video src="examples/videos/inferred-video-2.mp4" controls width="640"></video>
+<p align="center">
+  <a href="examples/videos/inferred-video-1.mp4">
+    <img src="examples/videos/inferred-video-1.gif" height="480" alt="Inferred video 1 preview">
+  </a>
+  <span style="display:inline-block; width:50px;"></span>
+  <a href="examples/videos/inferred-video-2.mp4">
+    <img src="examples/videos/inferred-video-2.gif" height="480" alt="Inferred video 2 preview">
+  </a>
+</p>
 
 ## Clients
 
