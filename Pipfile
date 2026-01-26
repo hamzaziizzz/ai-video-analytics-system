@@ -1,9 +1,4 @@
 [[source]]
-name = "pytorch-cu126"
-url = "https://download.pytorch.org/whl/cu126"
-verify_ssl = true
-
-[[source]]
 name = "pypi"
 url = "https://pypi.org/simple"
 verify_ssl = true
@@ -11,6 +6,11 @@ verify_ssl = true
 [[source]]
 name = "nvidia-ngc"
 url = "https://pypi.ngc.nvidia.com"
+verify_ssl = true
+
+[[source]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
 verify_ssl = true
 
 
