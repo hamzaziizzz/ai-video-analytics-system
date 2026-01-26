@@ -53,6 +53,11 @@ If enabled, `persondata` includes base64-encoded crops.
 When tracking is enabled, each image response includes `tracks` with per-ID
 track history (list of points). Tracking streams draw trail overlays.
 
+## Example Outputs
+
+<video src="examples/videos/inferred-video-1.mp4" controls width="640"></video>
+<video src="examples/videos/inferred-video-2.mp4" controls width="640"></video>
+
 ## Clients
 
 Use `ai_video_analytics_clients` for sync/async Python clients and helpers.
